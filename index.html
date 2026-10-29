@@ -161,6 +161,13 @@ main{max-width:760px;margin:0 auto;padding:16px 16px calc(96px + env(safe-area-i
 .rv .amt.in{color:var(--pos)}
 .rv .seg{margin:12px 0}
 .rv .acts{display:flex;gap:8px;justify-content:flex-end}
+.linkish{background:none;border:0;padding:0;text-align:left;font:inherit;font-weight:700;color:inherit;cursor:pointer}
+.linkish .pen{color:var(--muted);font-weight:400;font-size:14px;margin-left:4px}
+.rv .details{font-size:14px;margin-top:2px}
+textarea.input{min-height:120px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;resize:vertical}
+.status{display:flex;align-items:center;gap:8px;font-weight:700}
+.status i{width:10px;height:10px;border-radius:5px;background:var(--savings);display:inline-block}
+.status.off i{background:var(--line)}
 .rv .note{font-size:13px;background:var(--sunk);border-radius:8px;padding:6px 10px;margin-top:10px}
 .chip{display:inline-block;font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--sunk);color:var(--ink)}
 .bulk{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:10px 0 16px}
@@ -229,6 +236,9 @@ svg.chart text{fill:var(--muted);font-size:11px;font-family:var(--body)}
 <div id="sheetRoot"></div>
 <div id="toastRoot" aria-live="polite"></div>
 
+<script src="firebase-app-compat.js"></script>
+<script src="firebase-auth-compat.js"></script>
+<script src="firebase-firestore-compat.js"></script>
 <script>
 "use strict";
 /* ---------- helpers ---------- */
@@ -309,26 +319,20 @@ let sampleFn = null, downloadsNs = null, sampleImages = false;
 
 /* ---------- storage (db, with a local fallback) ---------- */
 const LKEY = "payday-local-v1";
+function readLocal(){ try{ return JSON.parse(localStorage.getItem(LKEY) || "{}"); }catch(e){ return {}; } }
+function writeLocal(all){ try{ localStorage.setItem(LKEY, JSON.stringify(all)); }catch(e){ toast("Couldn’t save on this device. The phone may be out of space."); } }
+const cleanDoc = body => JSON.parse(JSON.stringify(body));
 const store = {
-  db:null, col:null, chains:{},
+  cloud:null,
   save(id, body){
-    if (this.col){
-      const ref = this.col.doc(id);
-      const run = () => ref.set(body).catch(e => {
-        if (e && e.code === "unavailable") return new Promise(r => setTimeout(r, 600 + Math.random()*800)).then(() => ref.set(body));
-        throw e;
-      }).catch(e => toast(e && e.code === "quota_exceeded" ? "Storage is full. Export and clear old periods in Settings." : "Couldn’t save. Check your connection and try again."));
-      this.chains[id] = (this.chains[id] || Promise.resolve()).then(run, run);
-      return this.chains[id];
-    }
-    try{
-      const all = JSON.parse(localStorage.getItem(LKEY) || "{}"); all[id] = body; localStorage.setItem(LKEY, JSON.stringify(all));
-    }catch(e){ toast("Couldn’t save on this device. Back up your data in Settings."); }
+    body._u = Date.now();
+    const all = readLocal(); all[id] = cleanDoc(body); writeLocal(all);
+    if (this.cloud) return this.cloud.ref.doc(id).set(cleanDoc(body)).catch(e => toast("Couldn’t sync a change (" + (e.code || "error") + "). It’s still saved on this device."));
     return Promise.resolve();
   },
   remove(id){
-    if (this.col) return this.col.doc(id).delete().catch(()=>toast("Couldn’t delete. Try again."));
-    try{ const all = JSON.parse(localStorage.getItem(LKEY) || "{}"); delete all[id]; localStorage.setItem(LKEY, JSON.stringify(all)); }catch(e){}
+    const all = readLocal(); delete all[id]; writeLocal(all);
+    if (this.cloud) return this.cloud.ref.doc(id).delete().catch(() => toast("Couldn’t sync that delete. Try again."));
     return Promise.resolve();
   }
 };
@@ -424,7 +428,7 @@ function viewHome(){
       <h2>Start with your next paycheck</h2>
       <p class="muted">Enter the amount from your paystub. It gets split into Personal, Savings, Gas and Debt the same way your spreadsheet does.</p>
       <div class="row"><button class="btn yellow" data-act="new-period">Add a paycheck</button>
-      <label class="btn ghost" style="display:inline-flex;align-items:center;cursor:pointer">Restore from backup<input type="file" id="restoreIn" accept=".json,application/json" style="position:absolute;width:1px;height:1px;opacity:0"></label></div>
+      <label class="btn ghost" style="display:inline-flex;align-items:center;cursor:pointer">Restore from backup<input type="file" id="restoreIn" accept="*/*" style="position:absolute;width:1px;height:1px;opacity:0"></label></div>
       <p class="small muted" style="margin:12px 0 0">Have a Payday backup file? Restore it to bring back all your paychecks and history.</p>
     </div>${S.mode==="local"?localNotice():""}`;
   if (S.pIdx === null || S.pIdx >= list.length) S.pIdx = list.length - 1;
@@ -440,7 +444,7 @@ function viewHome(){
   const banners = [];
   if (nPend) banners.push(`<button class="banner" data-tab="review"><span class="dot" style="background:var(--debt)"></span><span><b>${nPend} charge${nPend>1?"s":""} waiting for review</b><span class="small muted">From your imported statements</span></span><span class="go">Review</span></button>`);
   const lb = lastBackup();
-  if (!lb || Math.round((toD(today) - toD(lb)) / 864e5) >= 14) banners.push(`<button class="banner" data-act="backup"><span class="dot" style="background:var(--gas)"></span><span><b>${lb ? "Time for a backup" : "Back up your data"}</b><span class="small muted">${lb ? "Last one was " + short(lb) : "Everything is saved only on this device"}</span></span><span class="go">Back up</span></button>`);
+  if (!(FB.user && driveOn()) && (!lb || Math.round((toD(today) - toD(lb)) / 864e5) >= 14)) banners.push(`<button class="banner" data-act="backup"><span class="dot" style="background:var(--gas)"></span><span><b>${lb ? "Time for a backup" : "Back up your data"}</b><span class="small muted">${lb ? "Last one was " + short(lb) : "Everything is saved only on this device"}</span></span><span class="go">Back up</span></button>`);
   if (latest && today >= addDays(nextPay, -1)) banners.push(`<button class="banner" data-act="new-period"><span class="dot" style="background:var(--savings)"></span><span><b>Payday on ${short(nextPay)}?</b><span class="small muted">Start the next paycheck</span></span><span class="go">Start</span></button>`);
 
   const txns = (per.txns || []).slice().sort((a,b) => b.date.localeCompare(a.date) || 0);
@@ -493,7 +497,7 @@ function fundRow(name, color, amt, sub, ratio){
 function txRow(t){
   const cat = category(t), f = FUNDS[t.fund] || FUNDS.personal;
   const inc = t.fund === "income";
-  return `<button class="tx" data-act="edit-tx" data-id="${esc(t.id)}"><span class="av" style="background:${f.color}">${esc((t.desc||"?").trim().charAt(0).toUpperCase())}</span><span class="mid"><span class="d" style="display:block">${esc(t.desc||"Untitled")}</span><span class="c">${esc(cat)}${t.fund!=="personal"&&!inc?" • "+f.label+" fund":""}${t.src&&t.src!=="sheet"&&t.src!=="manual"?" • "+esc(SOURCES[t.src]||t.src):""}</span></span><span class="a num ${inc||t.amount<0?"inc":""}">${inc?money(t.amount,{sign:true}):t.amount<0?"+"+money(-t.amount):money(t.amount)}</span></button>`;
+  return `<button class="tx" data-act="edit-tx" data-id="${esc(t.id)}"><span class="av" style="background:${f.color}">${esc((t.desc||"?").trim().charAt(0).toUpperCase())}</span><span class="mid"><span class="d" style="display:block">${esc(t.desc||"Untitled")}</span><span class="c">${t.details?esc(t.details)+" • ":""}${esc(cat)}${t.fund!=="personal"&&!inc?" • "+f.label+" fund":""}${t.src&&t.src!=="sheet"&&t.src!=="manual"?" • "+esc(SOURCES[t.src]||t.src):""}</span></span><span class="a num ${inc||t.amount<0?"inc":""}">${inc?money(t.amount,{sign:true}):t.amount<0?"+"+money(-t.amount):money(t.amount)}</span></button>`;
 }
 
 /* ---------- review ---------- */
@@ -510,11 +514,11 @@ function viewReview(){
     const pIn = periodFor(it.date);
     const where = it.fund === "paycheck" ? `Starts a new paycheck on ${short(it.date)}` : it.fund === "skip" ? "Won’t be counted" : pIn ? `Goes in the ${short(pIn)} paycheck` : "";
     return `<article class="rv">
-      <div class="top"><div class="mid"><div class="desc">${esc(it.desc)}</div><div class="meta">${esc(short(it.date))} • <span class="chip">${esc(SOURCES[it.src]||it.src)}</span></div></div>
+      <div class="top"><div class="mid"><button class="desc linkish" data-act="edit-item" data-id="${esc(it.id)}" aria-label="Rename or add details">${esc(it.desc)}<span class="pen" aria-hidden="true">✎</span></button>${it.details?`<div class="details">${esc(it.details)}</div>`:""}<div class="meta">${esc(short(it.date))} • <span class="chip">${esc(SOURCES[it.src]||it.src)}</span></div></div>
       <div class="amt num ${it.flow>0?"in":""}">${it.flow>0?"+"+money(it.flow):money(-it.flow)}</div></div>
       ${fundSeg(it)}
       <div class="row" style="justify-content:space-between"><span class="small muted">${esc(where)}</span>
-      <div class="acts"><button class="btn danger sm" data-act="deny" data-id="${esc(it.id)}">Deny</button><button class="btn sm" data-act="confirm" data-id="${esc(it.id)}">Confirm</button></div></div>
+      <div class="acts"><button class="btn danger sm" data-act="deny" data-id="${esc(it.id)}">Deny</button><button class="btn ghost sm" data-act="edit-item" data-id="${esc(it.id)}">Edit</button><button class="btn sm" data-act="confirm" data-id="${esc(it.id)}">Confirm</button></div></div>
       ${it.note?`<div class="note">${esc(it.note)}</div>`:""}
     </article>`;
   }).join("");
@@ -601,6 +605,28 @@ function viewTrends(){
 }
 
 /* ---------- settings ---------- */
+function syncPanel(){
+  const cfg = fbConfig(), last = lsGet("payday-drive-last");
+  if (!cfg) return `<div class="panel"><h2 style="margin-bottom:6px">Sync and Google Drive backup</h2>
+    <p class="muted" style="margin:0 0 12px">Use Payday on your phone and computer with the same data, and back it up to Google Drive every day. It uses a free Firebase project in your own Google account. Follow the setup guide, then paste the <b style="color:var(--ink)">firebaseConfig</b> block here.</p>
+    <textarea class="input" id="fb-cfg" placeholder="const firebaseConfig = {&#10;  apiKey: &quot;…&quot;,&#10;  authDomain: &quot;…&quot;,&#10;  …&#10;};"></textarea>
+    <div class="row" style="margin-top:12px"><button class="btn" data-act="fb-save">Save setup</button></div></div>`;
+  if (!FB.user) return `<div class="panel"><h2 style="margin-bottom:6px">Sync and Google Drive backup</h2>
+    <div class="status off"><i></i>Not signed in</div>
+    <p class="muted" style="margin:8px 0 12px">Sign in with the same Google account on every device. Whatever is on this device gets combined with your other devices, so nothing is lost.</p>
+    <div class="row"><button class="btn yellow" data-act="fb-signin">Sign in with Google</button><button class="btn ghost" data-act="fb-remove">Remove setup</button></div></div>`;
+  const snaps = cloudSnaps === "loading" ? `<p class="muted"><span class="spinner"></span> Loading…</p>` : Array.isArray(cloudSnaps) ? (cloudSnaps.length ? `<div class="list" style="margin-top:10px">${cloudSnaps.map(c => `<div class="tx" style="cursor:default"><span class="mid"><span class="d" style="display:block">${esc(new Date(c.at).toLocaleString("en-US",{weekday:"short",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}))}</span><span class="c">${c.id.startsWith("undo-") ? "Saved before a restore" : c.id.startsWith("day-") ? "Daily backup" : "Device data before syncing"}</span></span><button class="btn ghost sm" data-act="snap-restore" data-id="${esc(c.id)}">Restore</button></div>`).join("")}</div>` : `<p class="muted">No backups yet. The first one is made today.</p>`) : `<button class="btn ghost sm" data-act="snaps" style="margin-top:4px">Show daily backups</button>`;
+  return `<div class="panel"><h2 style="margin-bottom:6px">Sync and Google Drive backup</h2>
+    <div class="status"><i></i>Syncing as ${esc(FB.user.email || "you")}</div>
+    <p class="muted" style="margin:8px 0 12px">Changes show up on your other devices within seconds. It keeps working offline and catches up when you’re back online.</p>
+    <div class="row"><button class="btn ghost sm" data-act="fb-link">Copy link for another device</button><button class="btn ghost sm" data-act="fb-signout">Sign out</button></div>
+    <h3 style="margin:18px 0 6px">Google Drive</h3>
+    <p class="muted" style="margin:0 0 10px">${driveOn() ? `A dated copy goes in the “Payday backups” folder in your Drive once a day, the first time you tap in the app. If Google pops up for a second, that’s it getting permission. The last 60 days are kept. Last Drive backup: ${last ? short(last) : "not yet"}.` : "Daily Drive backups are off."}</p>
+    <div class="row">${driveOn() ? `<button class="btn sm" data-act="drive-now" ${driveBusy?"disabled":""}>${driveBusy ? '<span class="spinner"></span> Backing up' : "Back up to Drive now"}</button><button class="btn ghost sm" data-act="drive-off">Turn off</button>` : `<button class="btn sm" data-act="drive-on">Turn on daily Drive backups</button>`}</div>
+    <h3 style="margin:18px 0 6px">Undo a mistake</h3>
+    <p class="muted" style="margin:0 0 8px">A copy is also saved in your Firebase project once a day (last 30 days). Go back to one if something gets deleted by accident.</p>
+    ${snaps}</div>`;
+}
 function viewSettings(){
   const st = S.settings, pct = v => Math.round(v*10000)/100;
   const nRules = Object.keys(S.rules.map||{}).length;
@@ -619,16 +645,17 @@ function viewSettings(){
     <p class="small muted" style="margin:-4px 0 14px">The rest of extra income (${pct(1 - st.extraSavingsPct - (st.extraGasPct || 0))}%) goes to Personal money.</p>
     <button class="btn" data-act="save-settings">Save split</button>
   </div>
+  ${syncPanel()}
   <div class="panel"><h2 style="margin-bottom:6px">Install on your phone</h2>
     <p class="muted" style="margin:0 0 12px">${installEvt ? "Add Payday to your home screen so it opens like any other app, even offline." : "In Chrome, tap ⋮ then <b style=\"color:var(--ink)\">Add to Home screen</b> (or Install app). In Samsung Internet, tap ☰ then <b style=\"color:var(--ink)\">Add page to</b>, then Home screen."}</p>
     ${installEvt ? '<button class="btn yellow" data-act="install">Install app</button>' : ""}
-    <div class="notice">Payday doesn’t use any account. Your data is saved only in this browser on this device, so keep backups.</div>
+    ${store.cloud ? "" : `<div class="notice">Until you turn on sync, your data is saved only in this browser on this device, so keep backups.</div>`}
   </div>
   <div class="panel"><h2 style="margin-bottom:6px">Your data</h2>
     <p class="muted" style="margin:0 0 12px">${periodList().length} paychecks, ${periodList().reduce((a,p)=>a+(S.periods[p].txns||[]).length,0)} transactions, ${nRules} learned merchant${nRules===1?"":"s"}. Last backup: ${lastBackup() ? short(lastBackup()) : "never"}.</p>
     <div class="row">
       <button class="btn" data-act="backup">Back up now</button>
-      <label class="btn ghost" style="display:inline-flex;align-items:center;cursor:pointer">Restore from backup<input type="file" id="restoreIn" accept=".json,application/json" style="position:absolute;width:1px;height:1px;opacity:0"></label>
+      <label class="btn ghost" style="display:inline-flex;align-items:center;cursor:pointer">Restore from backup<input type="file" id="restoreIn" accept="*/*" style="position:absolute;width:1px;height:1px;opacity:0"></label>
     </div>
     <p class="small muted" style="margin:12px 0 0">A backup is one file. Keep a copy in Google Drive or email it to yourself. To move your data to another phone or computer, back up here and restore it there.</p>
     <div class="row" style="margin-top:12px"><button class="btn ghost" data-act="export">Export to spreadsheet (CSV)</button>${nRules?'<button class="btn ghost" data-act="clear-rules">Forget learned merchants</button>':""}</div>
@@ -643,7 +670,7 @@ function openSheet(html){
   $("#sheetRoot").innerHTML = `<div class="scrim" id="scrim"><div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>${html}</div></div>`;
   const f = $("#sheetRoot").querySelector("input:not([type=hidden])"); if (f) setTimeout(() => f.focus(), 60);
 }
-function closeSheet(){ $("#sheetRoot").innerHTML = ""; }
+function closeSheet(){ $("#sheetRoot").innerHTML = ""; if (S.deferRender){ S.deferRender = false; render(); } }
 function fundPicker(cur, opts){ return `<div class="seg" id="fundPick">${opts.map(f => `<button type="button" data-pickf="${f}" aria-pressed="${cur===f}"><span class="sw" style="background:${FUNDS[f].color}"></span>${FUNDS[f].label}</button>`).join("")}</div>`; }
 function txSheet(t){
   const isNew = !t;
@@ -651,6 +678,7 @@ function txSheet(t){
   openSheet(`<h2>${isNew?"Add a transaction":"Edit transaction"}</h2>
     <label class="field"><input class="input bigamt num" id="t-amt" inputmode="decimal" placeholder="$0.00" value="${t.amount===""?"":r2(t.amount)}" aria-label="Amount"><small style="text-align:center">Use a minus sign for a refund, like −24.64</small></label>
     <label class="field"><span>What was it?</span><input class="input" id="t-desc" value="${esc(t.desc)}" placeholder="Where it was charged"></label>
+    <label class="field"><span>Details</span><input class="input" id="t-details" value="${esc(t.details||"")}" placeholder="What it was for, who it was with…"></label>
     <label class="field"><span>Date</span><input class="input" type="date" id="t-date" value="${t.date}"></label>
     <div class="field"><span>Which fund</span>${fundPicker(t.fund, ["personal","gas","debt","income"])}</div>
     <div class="row" style="justify-content:space-between;margin-top:6px">
@@ -673,13 +701,23 @@ function periodSheet(edit){
     </div>`);
 }
 
+function itemSheet(it){
+  const orig = it.orig || it.desc;
+  openSheet(`<h2>Edit before confirming</h2>
+    <label class="field"><span>Name</span><input class="input" id="i-desc" value="${esc(it.desc)}"></label>
+    <label class="field"><span>Details</span><input class="input" id="i-details" value="${esc(it.details||"")}" placeholder="What it was for, who it was with…"></label>
+    <label class="field"><span>Date</span><input class="input" type="date" id="i-date" value="${it.date}"></label>
+    <label class="row small" style="gap:10px;margin:-2px 0 16px;flex-wrap:nowrap"><input type="checkbox" id="i-always" style="width:20px;height:20px;flex:none" ${(S.rules.names||{})[norm(orig)]?"checked":""}><span>Always rename “${esc(orig)}” to this name</span></label>
+    <p class="small muted" style="margin:-6px 0 14px">Bank shows: ${esc(orig)}</p>
+    <div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="save-item" data-id="${esc(it.id)}">Save</button></div>`);
+}
 /* ---------- actions ---------- */
 function findTx(id){ for (const p of periodList()){ const t = (S.periods[p].txns||[]).find(x => x.id === id); if (t) return {p, t}; } return null; }
 function savePeriod(p){ return store.save("p-" + p, S.periods[p]); }
 function saveInbox(){ if (S.inbox.seen.length > 4000) S.inbox.seen = S.inbox.seen.slice(-4000); return store.save("inbox", S.inbox); }
-function learn(it){ const k = norm(it.desc); if (!k || it.fund === "paycheck") return; if (S.rules.map[k] !== it.fund){ S.rules.map[k] = it.fund; S.rules._dirty = true; } }
+function learn(it){ const k = norm(it.orig || it.desc); if (!k || it.fund === "paycheck") return; if (S.rules.map[k] !== it.fund){ S.rules.map[k] = it.fund; S.rules._dirty = true; } }
 function saveRules(){ if (S.rules._dirty){ delete S.rules._dirty; store.save("rules", S.rules); } }
-function txFromItem(it){ return {id: uid(), date: it.date, desc: it.desc, fund: it.fund, amount: it.fund === "income" ? r2(it.flow) : r2(-it.flow), src: it.src}; }
+function txFromItem(it){ const t = {id: uid(), date: it.date, desc: it.desc, fund: it.fund, amount: it.fund === "income" ? r2(it.flow) : r2(-it.flow), src: it.src}; if (it.details) t.details = it.details; return t; }
 
 async function confirmItems(ids){
   const items = S.inbox.items.filter(i => ids.includes(i.id) && i.status === "pending");
@@ -746,6 +784,7 @@ function readTabular(rows, chosen, fileName){
   let hi = rows.findIndex((r,i) => i < 20 && r.filter(c=>c.trim()).length >= 3 && r.some(c => /date/i.test(c)));
   if (hi < 0) throw new Error("Couldn’t find a header row with a date column in this file.");
   const H = rows[hi].map(h => h.trim().toLowerCase()), data = rows.slice(hi+1);
+  const sig = hash(H.join("|"));
   const col = re => H.findIndex(h => re.test(h));
   const has = (...ns) => ns.every(n => H.includes(n));
   let fmt = "generic";
@@ -786,8 +825,10 @@ function readTabular(rows, chosen, fileName){
     }
   }
   let src = chosen;
+  const known = (S.settings.formats || {})[sig];
+  if (chosen === "auto" && known) src = known; else
   if (chosen === "auto") src = fmt === "chase_card" ? "chase_amazon" : fmt === "chase_bank" ? "chase_bank" : fmt === "paypal" ? "paypal" : (/paypal|synchrony|mastercard|syncb/i.test(fileName) ? "paypal_mc" : "other");
-  return {items, how, src, ambiguous};
+  return {items, how, src, ambiguous, sig};
 }
 async function pdfLines(file){
   if (!window.pdfjsLib) throw new Error("The PDF reader didn’t load. Check your connection and reload.");
@@ -824,7 +865,7 @@ async function handleFiles(files){
       const label = SOURCES[S.importSource] || "bank or credit card";
       if (/\.csv$/i.test(file.name) || file.type === "text/csv"){
         const res = readTabular(parseCSV(await file.text()), S.importSource, file.name);
-        Object.assign(r, {items: res.items, how: res.how, src: res.src});
+        Object.assign(r, {items: res.items, how: res.how, src: res.src, sig: res.sig});
       } else if (/\.pdf$/i.test(file.name) || file.type === "application/pdf"){
         r.msg = "Pulling text out of the PDF…"; render();
         const lines = await pdfLines(file);
@@ -879,8 +920,9 @@ function addImport(r){
     const fp = hash(base + "#" + counts[base]);
     if (seen.has(fp)){ skipped++; continue; }
     seen.add(fp); S.inbox.seen.push(fp);
-    const it = {id: uid(), fp, src: r.src, date: raw.date, desc: raw.desc, flow: r2(raw.flow), status:"pending"};
+    const it = {id: uid(), fp, src: r.src, date: raw.date, desc: raw.desc, orig: raw.desc, flow: r2(raw.flow), status:"pending"};
     it.fund = suggest(it);
+    const nm = (S.rules.names || {})[norm(raw.desc)]; if (nm) it.desc = nm;
     if (raw.pay || isCardPayment(it)){ payCount++; continue; }
     // already confirmed (spreadsheet, manual, or earlier import)?
     const amt = it.flow < 0 ? -it.flow : it.flow;
@@ -910,7 +952,7 @@ function isCardPayment(it){
   return false;
 }
 function suggest(it){
-  const k = norm(it.desc);
+  const k = norm(it.orig || it.desc);
   if (k && S.rules.map[k]){ const f = S.rules.map[k]; if ((it.flow > 0) === ["income","paycheck"].includes(f) || f === "skip" || (f === "personal")) return f; }
   if (it.flow > 0 && PAYCHECK_RE.test(it.desc)) return "paycheck";
   if (TRANSFER_RE.test(it.desc)) return "skip";
@@ -921,8 +963,8 @@ function suggest(it){
 
 /* ---------- export ---------- */
 async function exportCSV(){
-  const rows = [["Paycheck","Paycheck amount","Date","Description","Fund","Category","Amount","Source"]];
-  periodList().forEach(p => { const per = S.periods[p]; (per.txns||[]).slice().sort((a,b)=>a.date.localeCompare(b.date)).forEach(t => rows.push([p, per.amount, t.date, t.desc, FUNDS[t.fund]?.label||t.fund, category(t), t.amount, SOURCES[t.src]||t.src||""])); });
+  const rows = [["Paycheck","Paycheck amount","Date","Description","Fund","Category","Amount","Source","Details"]];
+  periodList().forEach(p => { const per = S.periods[p]; (per.txns||[]).slice().sort((a,b)=>a.date.localeCompare(b.date)).forEach(t => rows.push([p, per.amount, t.date, t.desc, FUNDS[t.fund]?.label||t.fund, category(t), t.amount, SOURCES[t.src]||t.src||"", t.details||""])); });
   const csv = rows.map(r => r.map(c => { c = String(c ?? ""); return /[",\n]/.test(c) ? `"${c.replace(/"/g,'""')}"` : c; }).join(",")).join("\n");
   saveFile(`payday-export-${todayIso()}.csv`, csv, "text/csv");
 }
@@ -945,18 +987,37 @@ function backupData(){
 }
 let pendingRestore = null;
 async function readBackup(file){
+  const name = file && file.name ? file.name : "that file";
   try{
-    const data = JSON.parse(await file.text());
-    if (!data || data.app !== "payday" || typeof data.docs !== "object") throw 0;
-    const n = Object.keys(data.docs).filter(k => k.startsWith("p-")).length;
-    pendingRestore = data.docs;
+    if (/\.zip$/i.test(name)) { toast(`“${name}” is the app download, not the backup. Pick payday-backup-2026-10-29.json.`); return; }
+    let text = await file.text();
+    text = text.replace(/^\uFEFF/, "").trim();
+    let data;
+    try{ data = JSON.parse(text); }
+    catch(e){
+      // Some phones wrap or rename the download; look for the backup inside it.
+      const i = text.indexOf('{"app":"payday"');
+      if (i < 0) throw new Error("notjson");
+      data = JSON.parse(text.slice(i, text.lastIndexOf("}") + 1));
+    }
+    let docs = data && data.app === "payday" && data.docs ? data.docs : null;
+    if (!docs && data && typeof data === "object" && Object.keys(data).some(k => /^p-\d{4}-\d{2}-\d{2}$/.test(k))) docs = data;
+    if (!docs) throw new Error("notpayday");
+    const n = Object.keys(docs).filter(k => k.startsWith("p-")).length;
+    if (!n) throw new Error("empty");
+    pendingRestore = docs;
     openSheet(`<h2>Restore this backup?</h2><p class="muted">It has ${n} paycheck${n===1?"":"s"}${data.exported?`, saved ${esc(new Date(data.exported).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}))}`:""}. Everything currently in the app on this device will be replaced.</p><div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="do-restore">Restore</button></div>`);
-  }catch(e){ toast("That isn’t a Payday backup file."); }
+  }catch(e){
+    const kb = file && file.size ? ` (${Math.max(1, Math.round(file.size/1024))} KB)` : "";
+    toast(`“${name}”${kb} isn’t a Payday backup. The right file is about 47 KB and starts with payday-backup.`);
+  }
 }
 function doRestore(){
   if (!pendingRestore) return;
-  try{ localStorage.setItem(LKEY, JSON.stringify(pendingRestore)); }catch(e){ toast("Couldn’t restore. The phone may be out of space."); return; }
-  applyDocs(pendingRestore); pendingRestore = null; S.pIdx = null; closeSheet(); S.view = "home"; render(); toast("Backup restored.");
+  const docs = pendingRestore, cur = readLocal();
+  Object.keys(cur).forEach(id => { if (!(id in docs)) store.remove(id); });
+  Object.entries(docs).forEach(([id, body]) => store.save(id, body));
+  applyDocs(docs); pendingRestore = null; S.pIdx = null; closeSheet(); S.view = "home"; render(); toast("Backup restored.");
 }
 let installEvt = null;
 function setupPWA(){
@@ -965,6 +1026,194 @@ function setupPWA(){
   window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt = e; if (S.view === "settings") render(); });
   window.addEventListener("appinstalled", () => { installEvt = null; toast("Installed. Open Payday from your home screen."); });
 }
+
+
+/* ---------- sync (Firebase) and Google Drive backups ---------- */
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+const FB = {auth:null, db:null, user:null, unsub:null, linking:false};
+let driveTok = null, driveBusy = false, cloudSnaps = null;
+const lsGet = k => { try{ return localStorage.getItem(k); }catch(e){ return null; } };
+const lsSet = (k, v) => { try{ v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); }catch(e){} };
+function fbConfig(){ try{ return JSON.parse(lsGet("payday-fb") || "null"); }catch(e){ return null; } }
+function parseConfig(text){
+  const cfg = {}; let m; const re = /["']?(\w+)["']?\s*:\s*["']([^"']+)["']/g;
+  while ((m = re.exec(text))) cfg[m[1]] = m[2];
+  return cfg.apiKey && cfg.authDomain && cfg.projectId && cfg.appId ? {apiKey:cfg.apiKey, authDomain:cfg.authDomain, projectId:cfg.projectId, appId:cfg.appId, storageBucket:cfg.storageBucket, messagingSenderId:cfg.messagingSenderId} : null;
+}
+function deviceLink(){ const c = fbConfig(); return c ? location.origin + location.pathname + "#fb=" + btoa(JSON.stringify(c)) : ""; }
+function takeLinkFromUrl(){
+  const h = location.hash;
+  if (!h.startsWith("#fb=")) return;
+  try{ const c = JSON.parse(atob(decodeURIComponent(h.slice(4)))); if (c.apiKey && c.projectId){ lsSet("payday-fb", JSON.stringify(c)); setTimeout(() => toast("Sync is set up on this device. Sign in with Google in Settings."), 400); } }catch(e){}
+  history.replaceState(null, "", location.pathname);
+}
+function initFirebase(){
+  const cfg = fbConfig();
+  if (!cfg || !window.firebase || FB.auth) return;
+  try{
+    if (!firebase.apps.length) firebase.initializeApp(cfg);
+    FB.auth = firebase.auth(); FB.db = firebase.firestore();
+    FB.db.enablePersistence({synchronizeTabs:true}).catch(() => {});
+    FB.auth.onAuthStateChanged(u => { FB.user = u; if (u) attachCloud(u); else detachCloud(); render(); });
+  }catch(e){ toast("That Firebase setup didn’t work. Remove it in Settings and paste it again."); }
+}
+function mergeDocs(cloud, local){
+  const out = {...local, ...cloud};
+  for (const id of Object.keys(local)){
+    const c = cloud[id], l = local[id]; if (!c) continue;
+    if (Array.isArray(c.txns) || Array.isArray(l.txns)){
+      const ids = new Set((c.txns || []).map(t => t.id));
+      out[id] = {...c, txns: [...(c.txns || []), ...(l.txns || []).filter(t => !ids.has(t.id))]};
+    } else if (id === "inbox"){
+      const ids = new Set((c.items || []).map(t => t.id)), fps = new Set((c.items || []).map(t => t.fp));
+      out[id] = {...c, items: [...(c.items || []), ...(l.items || []).filter(t => !ids.has(t.id) && !fps.has(t.fp))], seen: [...new Set([...(c.seen || []), ...(l.seen || [])])].slice(-4000)};
+    } else if (id === "rules"){
+      out[id] = {...l, ...c, map: {...(l.map || {}), ...(c.map || {})}, names: {...(l.names || {}), ...(c.names || {})}};
+    } else if (id === "settings"){
+      out[id] = {...l, ...c, formats: {...(l.formats || {}), ...(c.formats || {})}};
+    }
+  }
+  return out;
+}
+async function attachCloud(u){
+  if (FB.linking || store.cloud) return;
+  FB.linking = true;
+  const userRef = FB.db.collection("users").doc(u.uid), ref = userRef.collection("docs");
+  try{
+    if (lsGet("payday-linked") !== u.uid){
+      // First time this device joins: combine what's here with what's in the cloud, losing nothing.
+      const snap = await ref.get({source:"server"});
+      const cloud = {}; snap.docs.forEach(d => { cloud[d.id] = d.data(); });
+      const merged = mergeDocs(cloud, readLocal());
+      const batch = FB.db.batch(); let n = 0;
+      for (const [id, body] of Object.entries(merged)) if (JSON.stringify(body) !== JSON.stringify(cloud[id])){ batch.set(ref.doc(id), cleanDoc(body)); n++; }
+      if (n) await batch.commit();
+      lsSet("payday-linked", u.uid);
+    }
+  }catch(e){
+    FB.linking = false;
+    toast("Connect to the internet to finish turning on sync.");
+    window.addEventListener("online", () => { if (FB.user) attachCloud(FB.user); }, {once:true});
+    return;
+  }
+  store.cloud = {ref, uid: u.uid}; S.mode = "cloud"; FB.linking = false;
+  FB.unsub = ref.onSnapshot(snap => {
+    const docs = {}; snap.docs.forEach(d => { docs[d.id] = d.data(); });
+    writeLocal(docs); applyDocs(docs); S.ready = true;
+    if (isTyping() || $("#sheetRoot").innerHTML) S.deferRender = true; else render();
+  }, err => toast("Sync paused (" + (err.code || "error") + "). Your changes are saved on this device."));
+  dailyCloudSnapshot();
+  if (driveOn() && lsGet("payday-drive-last") !== todayIso() && driveTok) driveBackup();
+}
+function detachCloud(){
+  if (FB.unsub){ FB.unsub(); FB.unsub = null; }
+  if (store.cloud){ store.cloud = null; S.mode = "local"; applyDocs(readLocal()); render(); }
+}
+async function signIn(){
+  if (!FB.auth){ toast("Paste your Firebase setup first."); return; }
+  const p = new firebase.auth.GoogleAuthProvider(); p.addScope(DRIVE_SCOPE);
+  try{
+    const res = await FB.auth.signInWithPopup(p);
+    const t = res.credential && res.credential.accessToken;
+    if (t) driveTok = {token: t, exp: Date.now() + 50*60000};
+    if (lsGet("payday-drive") === null) lsSet("payday-drive", "on");
+  }catch(e){
+    const c = e && e.code;
+    toast(c === "auth/popup-closed-by-user" || c === "auth/cancelled-popup-request" ? "Sign-in cancelled." :
+          c === "auth/unauthorized-domain" ? `Add ${location.hostname} to Authorized domains in Firebase (guide step 3).` :
+          c === "auth/operation-not-allowed" ? "Turn on Google sign-in in Firebase (guide step 2)." :
+          c === "auth/popup-blocked" ? "Your browser blocked the sign-in window. Allow pop-ups for this site and try again." :
+          "Couldn’t sign in (" + (c || e.message) + ").");
+  }
+}
+async function dailyCloudSnapshot(){
+  if (!store.cloud) return;
+  const col = FB.db.collection("users").doc(store.cloud.uid).collection("snapshots"), id = "day-" + todayIso();
+  try{
+    const ex = await col.doc(id).get({source:"server"});
+    if (ex.exists) return;
+    await col.doc(id).set({at: Date.now(), data: JSON.stringify(readLocal())});
+    const all = await col.get({source:"server"});
+    const days = all.docs.filter(d => d.id.startsWith("day-")).sort((a,b) => a.id.localeCompare(b.id));
+    for (const d of days.slice(0, Math.max(0, days.length - 30))) await d.ref.delete();
+  }catch(e){}
+}
+async function loadCloudSnaps(){
+  if (!store.cloud) return;
+  cloudSnaps = "loading"; render();
+  try{
+    const all = await FB.db.collection("users").doc(store.cloud.uid).collection("snapshots").get({source:"server"});
+    cloudSnaps = all.docs.map(d => ({id: d.id, at: d.data().at})).sort((a,b) => b.at - a.at);
+  }catch(e){ cloudSnaps = null; toast("Couldn’t load daily backups. Check your connection."); }
+  render();
+}
+async function restoreCloudSnap(id){
+  try{
+    const d = await FB.db.collection("users").doc(store.cloud.uid).collection("snapshots").doc(id).get({source:"server"});
+    const docs = JSON.parse(d.data().data);
+    const n = Object.keys(docs).filter(k => k.startsWith("p-")).length;
+    pendingRestore = docs;
+    openSheet(`<h2>Go back to this backup?</h2><p class="muted">From ${esc(new Date(d.data().at).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}))}, with ${n} paychecks. Everything will be replaced on all your devices. Today’s data is backed up first, so you can undo this.</p><div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="do-restore-cloud">Restore</button></div>`);
+  }catch(e){ toast("Couldn’t open that backup."); }
+}
+async function restoreCloudConfirm(){
+  try{ await FB.db.collection("users").doc(store.cloud.uid).collection("snapshots").doc("undo-" + Date.now()).set({at: Date.now(), data: JSON.stringify(readLocal())}); }catch(e){}
+  doRestore();
+}
+function driveOn(){ return lsGet("payday-drive") === "on"; }
+async function getDriveToken(){
+  if (driveTok && driveTok.exp > Date.now() + 60000) return driveTok.token;
+  const p = new firebase.auth.GoogleAuthProvider(); p.addScope(DRIVE_SCOPE);
+  if (FB.user && FB.user.email) p.setCustomParameters({login_hint: FB.user.email});
+  const res = await FB.user.reauthenticateWithPopup(p);
+  const t = res.credential && res.credential.accessToken;
+  if (!t) throw new Error("no-token");
+  driveTok = {token: t, exp: Date.now() + 50*60000};
+  return t;
+}
+async function driveFetch(url, opts = {}){
+  const r = await fetch(url, {...opts, headers: {...(opts.headers || {}), Authorization: "Bearer " + driveTok.token}});
+  if (!r.ok){ let msg = r.status + ""; try{ const j = await r.json(); msg = (j.error && j.error.message) || msg; }catch(e){} const err = new Error(msg); err.status = r.status; throw err; }
+  return r.status === 204 ? null : r.json();
+}
+async function driveBackup(){
+  if (!FB.user || driveBusy) return;
+  driveBusy = true;
+  try{
+    await getDriveToken();
+    const API = "https://www.googleapis.com/drive/v3/files";
+    const q = encodeURIComponent("name='Payday backups' and mimeType='application/vnd.google-apps.folder' and trashed=false");
+    let folder = ((await driveFetch(`${API}?q=${q}&fields=files(id)`)).files || [])[0];
+    if (!folder) folder = await driveFetch(`${API}?fields=id`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({name:"Payday backups", mimeType:"application/vnd.google-apps.folder"})});
+    const name = `payday-backup-${todayIso()}.json`;
+    const q2 = encodeURIComponent(`'${folder.id}' in parents and trashed=false`);
+    const files = (await driveFetch(`${API}?q=${q2}&fields=files(id,name)&pageSize=500`)).files || [];
+    const form = new FormData();
+    form.append("metadata", new Blob([JSON.stringify({name, parents:[folder.id], mimeType:"application/json"})], {type:"application/json"}));
+    form.append("file", new Blob([JSON.stringify({app:"payday", version:1, exported:new Date().toISOString(), docs: readLocal()})], {type:"application/json"}));
+    await driveFetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", {method:"POST", body: form});
+    for (const f of files.filter(f => f.name === name)) await driveFetch(`${API}/${f.id}`, {method:"DELETE"}).catch(() => {});
+    const old = files.filter(f => f.name !== name && /^payday-backup-/.test(f.name)).sort((a,b) => a.name.localeCompare(b.name));
+    for (const f of old.slice(0, Math.max(0, old.length - 59))) await driveFetch(`${API}/${f.id}`, {method:"DELETE"}).catch(() => {});
+    lsSet("payday-drive-last", todayIso()); lsSet("payday-last-backup", todayIso());
+    toast("Backed up to Google Drive.");
+  }catch(e){
+    const c = e && e.code;
+    if (c === "auth/popup-closed-by-user" || c === "auth/cancelled-popup-request") toast("Google Drive backup skipped. It’ll try again tomorrow.");
+    else if (c === "auth/popup-blocked") toast("Allow pop-ups for this site so Drive backups can run.");
+    else if (e && e.status === 403 && /drive api|not been used|disabled/i.test(e.message)) toast("Turn on the Google Drive API for your Firebase project (guide step 6).");
+    else toast("Google Drive backup didn’t work (" + (c || e.message) + ").");
+  }
+  driveBusy = false; render();
+}
+// The daily Drive backup runs on your first tap of the day, because Google only hands out a Drive pass after a tap.
+document.addEventListener("click", e => {
+  if (!driveOn() || !FB.user || driveBusy || e.target.closest("[data-act=drive-now],[data-act=drive-off]")) return;
+  const today = todayIso();
+  if (lsGet("payday-drive-last") === today || lsGet("payday-drive-tried") === today) return;
+  lsSet("payday-drive-tried", today);
+  driveBackup();
+}, true);
 
 /* ---------- toast ---------- */
 let toastT;
@@ -1015,7 +1264,8 @@ document.addEventListener("click", async e => {
     let t;
     if (id){ const f = findTx(id); if (!f) return; t = f.t; S.periods[f.p].txns = S.periods[f.p].txns.filter(x => x.id !== id); touched.add(f.p); }
     else t = {id: uid(), src:"manual"};
-    Object.assign(t, {amount: amt, desc: desc || "Untitled", date, fund});
+    const details = $("#t-details").value.trim();
+    Object.assign(t, {amount: amt, desc: desc || "Untitled", date, fund, details}); if (!details) delete t.details;
     const p = periodFor(date); (S.periods[p].txns = S.periods[p].txns || []).push(t); touched.add(p);
     closeSheet(); render(); for (const q of touched) await savePeriod(q); toast(id ? "Saved." : "Added.");
   }
@@ -1039,6 +1289,39 @@ document.addEventListener("click", async e => {
     S.settings = {...S.settings, ...vals, kind:"settings"}; store.save("settings", S.settings); render(); toast("Split saved. Every paycheck uses it.");
   }
   else if (a === "export") exportCSV();
+  else if (a === "edit-item"){ const it = S.inbox.items.find(i => i.id === id); if (it) itemSheet(it); }
+  else if (a === "save-item"){
+    const it = S.inbox.items.find(i => i.id === id); if (!it) return;
+    const desc = $("#i-desc").value.trim(), details = $("#i-details").value.trim(), date = $("#i-date").value;
+    if (!it.orig) it.orig = it.desc;
+    it.desc = desc || it.orig; if (details) it.details = details; else delete it.details; if (date) it.date = date;
+    const k = norm(it.orig);
+    if (k){
+      S.rules.names = S.rules.names || {};
+      if ($("#i-always").checked && it.desc !== it.orig) S.rules.names[k] = it.desc; else if (!$("#i-always").checked) delete S.rules.names[k];
+      store.save("rules", S.rules);
+    }
+    closeSheet(); render(); saveInbox(); toast("Saved.");
+  }
+  else if (a === "fb-save"){
+    const cfg = parseConfig($("#fb-cfg").value);
+    if (!cfg){ toast("That doesn’t look like the Firebase setup. Copy the whole firebaseConfig block."); return; }
+    lsSet("payday-fb", JSON.stringify(cfg)); initFirebase(); render(); toast("Saved. Now sign in with Google.");
+  }
+  else if (a === "fb-signin") signIn();
+  else if (a === "fb-signout"){ if (FB.auth) FB.auth.signOut(); }
+  else if (a === "fb-remove"){ if (FB.auth && FB.user) FB.auth.signOut(); lsSet("payday-fb", null); lsSet("payday-linked", null); toast("Sync setup removed. Reload the app to finish."); render(); }
+  else if (a === "fb-link"){
+    const link = deviceLink();
+    try{ await navigator.clipboard.writeText(link); toast("Link copied. Send it to your other device and open it there."); }
+    catch(_){ openSheet(`<h2>Link for your other device</h2><p class="muted">Copy this and open it on your other device.</p><textarea class="input" readonly>${esc(link)}</textarea><div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" data-act="close">Done</button></div>`); }
+  }
+  else if (a === "drive-now") driveBackup();
+  else if (a === "drive-on"){ lsSet("payday-drive", "on"); render(); }
+  else if (a === "drive-off"){ lsSet("payday-drive", "off"); render(); }
+  else if (a === "snaps") loadCloudSnaps();
+  else if (a === "snap-restore") restoreCloudSnap(id);
+  else if (a === "do-restore-cloud") restoreCloudConfirm();
   else if (a === "backup") backupData();
   else if (a === "do-restore") doRestore();
   else if (a === "install"){ if (installEvt){ installEvt.prompt(); installEvt = null; } }
@@ -1048,7 +1331,7 @@ document.addEventListener("click", async e => {
 document.addEventListener("change", e => {
   if (e.target.id === "restoreIn" && e.target.files.length){ readBackup(e.target.files[0]); e.target.value = ""; return; }
   if (e.target.id === "fileIn" && e.target.files.length){ handleFiles([...e.target.files]); e.target.value = ""; }
-  const s = e.target.closest("[data-act=imp-src]"); if (s){ const r = S.imports.find(x => x.id === s.dataset.id); if (r) r.src = s.value; }
+  const s = e.target.closest("[data-act=imp-src]"); if (s){ const r = S.imports.find(x => x.id === s.dataset.id); if (r){ r.src = s.value; if (r.sig){ S.settings.formats = {...(S.settings.formats || {}), [r.sig]: s.value}; store.save("settings", S.settings); toast(`Got it. Files like this will be marked ${SOURCES[s.value]} from now on.`); } } }
 });
 document.addEventListener("dragover", e => { const d = e.target.closest && e.target.closest("#drop"); if (d){ e.preventDefault(); d.classList.add("over"); } });
 document.addEventListener("dragleave", e => { const d = e.target.closest && e.target.closest("#drop"); if (d) d.classList.remove("over"); });
@@ -1057,7 +1340,7 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") closeSheet()
 $("#fab").addEventListener("click", () => txSheet(null));
 
 try{ const t = localStorage.getItem("payday-theme"); if (t && t !== "auto") document.documentElement.dataset.theme = t; }catch(_){}
-localBoot(); setupPWA();
+takeLinkFromUrl(); localBoot(); setupPWA(); initFirebase();
 </script>
 </body>
 </html>
