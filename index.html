@@ -719,10 +719,19 @@ function learn(it){ const k = norm(it.orig || it.desc); if (!k || it.fund === "p
 function saveRules(){ if (S.rules._dirty){ delete S.rules._dirty; store.save("rules", S.rules); } }
 function txFromItem(it){ const t = {id: uid(), date: it.date, desc: it.desc, fund: it.fund, amount: it.fund === "income" ? r2(it.flow) : r2(-it.flow), src: it.src}; if (it.details) t.details = it.details; return t; }
 
+const busyIds = new Set();
 async function confirmItems(ids){
-  const items = S.inbox.items.filter(i => ids.includes(i.id) && i.status === "pending");
+  const items = S.inbox.items.filter(i => ids.includes(i.id) && i.status === "pending" && !busyIds.has(i.id));
   if (!items.length) return;
+  items.forEach(i => busyIds.add(i.id));
+  try{ await confirmItemsRun(items); } finally { items.forEach(i => busyIds.delete(i.id)); }
+}
+async function confirmItemsRun(items){
   const touched = new Set(); let made = 0, skipped = 0, pays = 0;
+  // check everything can land BEFORE changing anything, so a failure can't leave half the batch added
+  const newPayDates = items.filter(i => i.fund === "paycheck").map(i => i.date);
+  const hasHome = periodList().length > 0 || newPayDates.length > 0;
+  if (!hasHome && items.some(i => i.fund !== "paycheck" && i.fund !== "skip")){ toast("Add a paycheck first so charges have somewhere to go."); return; }
   // paychecks first so later charges land in them
   items.filter(i => i.fund === "paycheck").sort((a,b)=>a.date.localeCompare(b.date)).forEach(it => {
     if (!S.periods[it.date]) S.periods[it.date] = {kind:"period", date: it.date, amount: r2(it.flow), txns: []};
@@ -739,8 +748,9 @@ async function confirmItems(ids){
   }
   S.inbox.items = S.inbox.items.filter(i => !items.includes(i));
   render();
-  for (const p of touched) await savePeriod(p);
-  await saveInbox(); saveRules();
+  const saves = [saveInbox(), ...[...touched].map(savePeriod)];
+  saveRules();
+  await Promise.all(saves);
   toast([made && `${made} added`, pays && `${pays} paycheck${pays>1?"s":""} started`, skipped && `${skipped} skipped`].filter(Boolean).join(", ") + ".");
 }
 function denyItem(id){
@@ -1098,6 +1108,9 @@ async function attachCloud(u){
   }
   store.cloud = {ref, uid: u.uid}; S.mode = "cloud"; FB.linking = false;
   FB.unsub = ref.onSnapshot(snap => {
+    // Our own not-yet-synced writes echo back mid-save with a half-updated picture (e.g. new transaction
+    // but old review list), which brought confirmed items back. This device's state is already current, so skip them.
+    if (S.ready && snap.metadata.hasPendingWrites) return;
     const docs = {}; snap.docs.forEach(d => { docs[d.id] = d.data(); });
     writeLocal(docs); applyDocs(docs); S.ready = true;
     if (isTyping() || $("#sheetRoot").innerHTML) S.deferRender = true; else render();
