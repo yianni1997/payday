@@ -787,7 +787,7 @@ async function refreshApp(){
 }
 
 /* ---------- live bank connections (Plaid, through your own private server) ---------- */
-const PL = {items: null, busy: "", err: "", pick: null};
+const PL = {items: null, busy: "", err: "", pick: null, last: (() => { try{ return JSON.parse(localStorage.getItem("payday-lastpull") || "null"); }catch(e){ return null; } })()};
 function plaidPick(){ const per = periodList(); return PL.pick && per.includes(PL.pick) ? PL.pick : per[per.length - 1]; }
 const OAUTH_URL = location.search.includes("oauth_state_id") ? location.href : null; // set when a bank sends you back from signing in
 const minIso = (a, b) => a < b ? a : b;
@@ -867,7 +867,7 @@ async function plaidPull(){
   plaidSet("Pulling " + short(start) + " to " + short(end) + "…");
   try{
     const res = await plaidCall("sync", {start, end});
-    const groups = {}, notes = []; let pendingSkipped = 0, total = 0;
+    const groups = {}, notes = [], pre = []; let pendingSkipped = 0, total = 0;
     for (const it of res.items){
       if (it.error){
         notes.push(it.institution + (it.error.code === "ITEM_LOGIN_REQUIRED" ? " needs you to log in again" : it.error.code === "PRODUCT_NOT_READY" ? " is still getting ready, try again in a minute" : ": " + it.error.message));
@@ -876,23 +876,65 @@ async function plaidPull(){
       const byId = Object.fromEntries(it.accounts.map(a => [a.id, a]));
       for (const t of it.transactions){
         const a = byId[t.accountId]; if (!a) continue;
-        const src = plaidSrc(it.institution, a); if (src === "off") continue;
-        if (t.pending){ pendingSkipped++; continue; }
+        const src = plaidSrc(it.institution, a), desc = (t.merchant || t.name || "Charge").trim();
+        if (src === "off"){ pre.push({date: t.date, desc, flow: r2(-t.amount), src: "off", acct: a.name + (a.mask ? " ••" + a.mask : ""), outcome: "off", note: "That account is set to “Don’t pull” below."}); continue; }
+        if (t.pending){ pendingSkipped++; pre.push({date: t.date, desc, flow: r2(-t.amount), src, outcome: "pending", note: "Shows up once the bank posts it. Pull again in a day or two."}); continue; }
         (groups[src] = groups[src] || []).push({date: t.date, desc: (t.merchant || t.name || "Charge").trim(), flow: -t.amount});
         total++;
       }
     }
     PL.items = null;
-    const msgs = [];
+    const rows = pre.slice();
     for (const [src, items] of Object.entries(groups)){
       const r = {id: uid(), name: SOURCES[src] + " (live)", state:"parsing", flip:false, items, src, range: [start, end]};
-      S.imports.unshift(r); addImport(r); msgs.push(r.msg);
+      S.imports.unshift(r); addImport(r); rows.push(...(r.log || []));
     }
     plaidSet("");
-    if (!total) toast(notes.length ? notes.join(". ") + "." : past ? "Nothing new for that paycheck. Either it’s all imported already, or the bank doesn’t share history that far back." : "Nothing new in that date range yet.");
-    else { go("review"); toast([`Pulled ${total} charge${total===1?"":"s"}`, pendingSkipped && `${pendingSkipped} still pending, skipped`, ...notes].filter(Boolean).join(". ") + "."); }
+    PL.last = {start, end, at: Date.now(), rows, notes};
+    lsSet("payday-lastpull", JSON.stringify(PL.last));
+    if (!rows.length) toast(notes.length ? notes.join(". ") + "." : past ? "The bank sent nothing for that paycheck. It may not share history that far back." : "The bank hasn’t sent anything for these dates yet.");
+    else pullSheet();
     plaidLoad();
   }catch(e){ plaidSet("", e.message); }
+}
+const PULL_KINDS = [
+  ["review", "Sent to Review", "var(--savings)"],
+  ["dup", "Hidden as duplicates", "var(--gas)"],
+  ["seen", "Already imported", "var(--muted)"],
+  ["paid", "Card payments left out", "var(--muted)"],
+  ["outside", "Outside this paycheck", "var(--muted)"],
+  ["pending", "Pending, not posted yet", "var(--muted)"],
+  ["off", "From accounts set to “Don’t pull”", "var(--muted)"]
+];
+function pullSheet(){
+  const L = PL.last; if (!L) return;
+  const rows = L.rows.map((r, i) => ({...r, i}));
+  const nReview = rows.filter(r => r.outcome === "review").length;
+  const summary = PULL_KINDS.map(([k, label]) => { const n = rows.filter(r => r.outcome === k).length; return n ? `<span class="chip">${n} ${esc(label.toLowerCase())}</span>` : ""; }).join(" ");
+  const groups = PULL_KINDS.map(([k, label, col]) => {
+    const g = rows.filter(r => r.outcome === k).sort((a,b) => b.date.localeCompare(a.date)); if (!g.length) return "";
+    return `<h3 style="margin:18px 0 6px;display:flex;align-items:center;gap:8px"><span style="width:10px;height:10px;border-radius:5px;background:${col};display:inline-block"></span>${esc(label)} (${g.length})</h3>
+      <div class="list">${g.map(r => `<div class="tx" style="cursor:default;align-items:flex-start"><span class="mid"><span class="d" style="display:block;white-space:normal">${esc(r.desc)}</span>
+        <span class="c">${esc(short(r.date))} • ${esc(r.acct || SOURCES[r.src] || r.src)}${r.note ? `<br>${esc(r.note)}` : ""}</span>
+        ${["seen","paid","outside"].includes(k) ? `<button class="btn ghost sm" style="margin-top:8px" data-act="pull-force" data-i="${r.i}">Send to Review anyway</button>` : ""}</span>
+        <span class="a num ${r.flow > 0 ? "inc" : ""}">${r.flow > 0 ? "+" + money(r.flow) : money(-r.flow)}</span></div>`).join("")}</div>`;
+  }).join("");
+  openSheet(`<h2>What the pull found</h2>
+    <p class="muted" style="margin:-6px 0 10px">${esc(short(L.start))} to ${esc(short(L.end))}: ${rows.length} item${rows.length===1?"":"s"} from the bank.</p>
+    <div style="display:flex;flex-wrap:wrap;gap:6px">${summary}</div>
+    ${L.notes && L.notes.length ? `<div class="notice">${esc(L.notes.join(". "))}.</div>` : ""}
+    ${groups}
+    <div class="row" style="justify-content:flex-end;margin-top:16px;position:sticky;bottom:0;background:var(--bg);padding-top:10px"><button class="btn ghost" data-act="close">Close</button>${nReview ? `<button class="btn" data-act="pull-review">Go to Review (${nReview})</button>` : ""}</div>`);
+}
+function pullForce(i){
+  const row = PL.last && PL.last.rows[i]; if (!row) return;
+  const it = {id: uid(), fp: hash("forced|" + uid()), src: row.src, date: row.date, desc: row.desc, orig: row.desc, flow: row.flow, status: "pending"};
+  it.fund = suggest(it);
+  const nm = (S.rules.names || {})[norm(row.desc)]; if (nm) it.desc = nm;
+  S.inbox.items.push(it); saveInbox();
+  row.outcome = "review"; row.note = "You sent this to Review.";
+  lsSet("payday-lastpull", JSON.stringify(PL.last));
+  renderTabs(); pullSheet(); toast("Sent to Review.");
 }
 function viewAccounts(){
   const url = plaidUrl(), signed = !!FB.user, ready = url && signed, items = PL.items || [];
@@ -915,6 +957,7 @@ function viewAccounts(){
   ${ready && items.length ? `<div class="panel">
     <label class="field" style="margin-bottom:12px"><span>Which paycheck</span><select class="input" data-act="plaid-period" aria-label="Which paycheck to pull">${pickOpts}</select></label>
     <button class="btn yellow" data-act="plaid-pull" ${PL.busy?"disabled":""} style="width:100%">${cur === latest ? "Pull this paycheck" : "Pull the " + esc(short(cur)) + " paycheck"} (${esc(range)})</button>
+    ${PL.last ? `<button class="btn ghost sm" data-act="pull-results" style="margin-top:10px">See what the last pull found (${esc(short(PL.last.start))} to ${esc(short(PL.last.end))})</button>` : ""}
     <p class="small muted" style="margin:10px 0 0">Gets every connected account at once. Pending charges are skipped until they post. Anything already imported or confirmed is skipped automatically, so pulling an older paycheck won’t double anything up.${cur !== latest ? " Banks usually share about 90 days of history from when you connected, so very old paychecks may come back empty." : ""}</p></div>` : ""}
   <div class="panel"><h2 style="margin-bottom:6px">Connected accounts</h2>
     ${!url ? `<p class="muted" style="margin:0 0 10px">One-time setup needed: follow SETUP-PLAID.txt (it’s in your update zip), then paste your server link below.</p>` : ""}
@@ -1188,21 +1231,23 @@ function addImport(r){
   periodList().forEach(p => (S.periods[p].txns||[]).forEach(t => confirmed.push({...t, p})));
   const used = new Set();
   const within = (a, b, n) => Math.abs((toD(a) - toD(b)) / 864e5) <= n;
+  r.log = r.log || [];
+  const L = (raw, outcome, note) => r.log.push({date: raw.date, desc: raw.desc, flow: r2(raw.flow), src: r.src, outcome, note: note || ""});
   for (const raw of items){
     const base = `${r.src}|${raw.date}|${raw.flow.toFixed(2)}|${norm(raw.desc)}`;
-    { const rg = r.range || curRange(); if (rg && !(raw.date >= rg[0] && raw.date <= rg[1]) && !(raw.pay || (raw.flow > 0 && PAYCHECK_RE.test(raw.desc)) && raw.date >= rg[0])){ outside++; continue; } }
+    { const rg = r.range || curRange(); if (rg && !(raw.date >= rg[0] && raw.date <= rg[1]) && !(raw.pay || (raw.flow > 0 && PAYCHECK_RE.test(raw.desc)) && raw.date >= rg[0])){ outside++; L(raw, "outside", `Dated outside ${short(rg[0])} to ${short(rg[1])}.`); continue; } }
     counts[base] = (counts[base] || 0) + 1;
     const fp = hash(base + "#" + counts[base]);
-    if (seen.has(fp)){ skipped++; continue; }
+    if (seen.has(fp)){ skipped++; L(raw, "seen", "Came in on an earlier import or pull. It was confirmed, denied, or is already waiting in Review."); continue; }
     seen.add(fp); S.inbox.seen.push(fp);
     const it = {id: uid(), fp, src: r.src, date: raw.date, desc: raw.desc, orig: raw.desc, flow: r2(raw.flow), status:"pending"};
     it.fund = suggest(it);
     const nm = (S.rules.names || {})[norm(raw.desc)]; if (nm) it.desc = nm;
-    if (raw.pay || isCardPayment(it)){ payCount++; continue; }
+    if (raw.pay || isCardPayment(it)){ payCount++; L(raw, "paid", "Paying off a card isn’t new spending."); continue; }
     // already confirmed (spreadsheet, manual, or earlier import)?
     const amt = it.flow < 0 ? -it.flow : it.flow;
     const hitC = confirmed.find(t => !used.has(t.id) && Math.abs(Math.abs(+t.amount) - amt) < 0.005 && within(t.date, it.date, 4) && (t.fund === "income") === (it.flow > 0 && it.fund === "income"));
-    if (hitC && it.fund !== "skip"){ used.add(hitC.id); it.status = "dup"; it.dupNote = `Already in your ${short(hitC.p)} paycheck as “${hitC.desc}” on ${short(hitC.date)}.`; dupCount++; S.inbox.items.push(it); continue; }
+    if (hitC && it.fund !== "skip"){ used.add(hitC.id); it.status = "dup"; it.dupNote = `Already in your ${short(hitC.p)} paycheck as “${hitC.desc}” on ${short(hitC.date)}.`; dupCount++; L(raw, "dup", it.dupNote); S.inbox.items.push(it); continue; }
     // overlaps with another account still in review?
     const hitI = S.inbox.items.find(o => o.status === "pending" && !used.has(o.id) && o.src !== it.src && Math.abs(o.flow - it.flow) < 0.005 && within(o.date, it.date, 4) && (o.src === "paypal" || it.src === "paypal"));
     if (hitI){
@@ -1210,9 +1255,9 @@ function addImport(r){
       const pp = hitI.src === "paypal" ? hitI : it, other = pp === it ? hitI : it;
       if (/paypal|pp\*/i.test(other.desc) && !/paypal/i.test(pp.desc)) other.desc = `${pp.desc} (via PayPal)`;
       pp.status = "dup"; pp.dupNote = `Same charge as “${other.desc}” on ${SOURCES[other.src]||other.src}, ${short(other.date)}.`; dupCount++;
-      if (pp === it){ S.inbox.items.push(it); continue; }
+      if (pp === it){ L(raw, "dup", it.dupNote); S.inbox.items.push(it); continue; }
     }
-    S.inbox.items.push(it); added++;
+    S.inbox.items.push(it); added++; L(raw, "review", it.fund === "skip" ? "Pre-set to Skip, so check it in Review." : "");
   }
   r.state = "added";
   r.msg = [`${added} sent to Review`, dupCount && `${dupCount} hidden as duplicates`, payCount && `${payCount} card payment${payCount>1?"s":""} left out`, skipped && `${skipped} already imported`, outside && `${outside} outside this paycheck left out`].filter(Boolean).join(", ") + ".";
@@ -1632,6 +1677,9 @@ document.addEventListener("click", async e => {
   else if (a === "plaid-relogin") plaidConnect(id);
   else if (a === "plaid-refresh") plaidLoad();
   else if (a === "plaid-pull") plaidPull();
+  else if (a === "pull-results") pullSheet();
+  else if (a === "pull-force") pullForce(+el.dataset.i);
+  else if (a === "pull-review"){ closeSheet(); go("review"); }
   else if (a === "plaid-remove"){
     const it = (PL.items || []).find(x => x.itemId === id); if (!it) return;
     openSheet(`<h2>Remove ${esc(it.institution)}?</h2><p class="muted">This disconnects it from Plaid. Charges you’ve already imported stay put.</p><div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Cancel</button><button class="btn danger" data-act="plaid-remove-confirm" data-id="${esc(id)}">Remove</button></div>`);
