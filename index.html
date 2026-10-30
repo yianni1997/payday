@@ -394,7 +394,10 @@ function calc(p){
     savingsBase: r2(pay*st.savingsPct), savingsExtra: r2(extra*st.extraSavingsPct)
   };
 }
-function pending(){ return S.inbox.items.filter(i => i.status === "pending"); }
+// Review only deals with the current (latest) paycheck. A new paycheck deposit can still come through so the next one can be started.
+function curRange(){ const l = periodList(); if (!l.length) return null; const p = l[l.length-1]; return [p, periodEnd(p)]; }
+function inCur(it){ const r = curRange(); return !r || (it.date >= r[0] && it.date <= r[1]) || ((it.isPay || it.fund === "paycheck") && it.date >= r[0]); }
+function pending(){ return S.inbox.items.filter(i => i.status === "pending" && inCur(i)); }
 
 /* ---------- rendering ---------- */
 const ICONS = {
@@ -514,7 +517,7 @@ function fundSeg(it){
 }
 function viewReview(){
   const items = pending().sort((a,b) => b.date.localeCompare(a.date));
-  const dups = S.inbox.items.filter(i => i.status === "dup");
+  const dups = S.inbox.items.filter(i => i.status === "dup" && inCur(i));
   const head = `<div class="topbar"><h1>Review</h1></div>`;
   if (!items.length && !dups.length) return head + `<div class="list"><div class="empty"><h3>All caught up</h3>Import a statement and new charges will show up here for you to confirm.<div style="margin-top:14px"><button class="btn" data-tab="import">Import a statement</button></div></div></div>`;
   const body = items.map(it => {
@@ -530,7 +533,7 @@ function viewReview(){
     </article>`;
   }).join("");
   const dupHtml = dups.length ? `<details class="dups"><summary>${dups.length} hidden as duplicates</summary>${dups.map(it => `<article class="rv"><div class="top"><div class="mid"><div class="desc">${esc(it.desc)}</div><div class="meta">${esc(short(it.date))} • <span class="chip">${esc(SOURCES[it.src]||it.src)}</span></div></div><div class="amt num">${money(Math.abs(it.flow))}</div></div><div class="note">${esc(it.dupNote||"Matches another charge")}</div><div class="acts" style="margin-top:10px"><button class="btn ghost sm" data-act="dismiss-dup" data-id="${esc(it.id)}">It’s a duplicate</button><button class="btn sm" data-act="undup" data-id="${esc(it.id)}">Not a duplicate</button></div></article>`).join("")}</details>` : "";
-  return head + (items.length ? `<div class="bulk"><span class="muted">${items.length} to review. The pre-selected choice is my best guess, and it learns from what you pick.</span><button class="btn yellow" data-act="confirm-all">Confirm all ${items.length}</button></div>` : `<p class="muted">Nothing left to review.</p>`) + body + dupHtml;
+  return head + (items.length ? `<div class="bulk"><span class="muted">${items.length} to review. The pre-selected choice is my best guess, and it learns from what you pick.</span><span class="row" style="gap:8px"><button class="btn yellow" data-act="confirm-all">Confirm all ${items.length}</button><button class="btn danger" data-act="deny-all">Deny all ${items.length}</button></span></div>` : `<p class="muted">Nothing left to review.</p>`) + body + dupHtml;
 }
 
 /* ---------- import ---------- */
@@ -925,7 +928,7 @@ async function handleFiles(files){
 function addImport(r){
   const items = r.items.map(i => ({...i, flow: r.flip ? -i.flow : i.flow}));
   const seen = new Set(S.inbox.seen), counts = {};
-  let skipped = 0, dupCount = 0, added = 0, payCount = 0;
+  let skipped = 0, dupCount = 0, added = 0, payCount = 0, outside = 0;
   // recent confirmed transactions to check against
   const confirmed = [];
   periodList().forEach(p => (S.periods[p].txns||[]).forEach(t => confirmed.push({...t, p})));
@@ -933,6 +936,7 @@ function addImport(r){
   const within = (a, b, n) => Math.abs((toD(a) - toD(b)) / 864e5) <= n;
   for (const raw of items){
     const base = `${r.src}|${raw.date}|${raw.flow.toFixed(2)}|${norm(raw.desc)}`;
+    { const rg = curRange(); if (rg && !(raw.date >= rg[0] && raw.date <= rg[1]) && !(raw.pay || (raw.flow > 0 && PAYCHECK_RE.test(raw.desc)) && raw.date >= rg[0])){ outside++; continue; } }
     counts[base] = (counts[base] || 0) + 1;
     const fp = hash(base + "#" + counts[base]);
     if (seen.has(fp)){ skipped++; continue; }
@@ -957,7 +961,7 @@ function addImport(r){
     S.inbox.items.push(it); added++;
   }
   r.state = "added";
-  r.msg = [`${added} sent to Review`, dupCount && `${dupCount} hidden as duplicates`, payCount && `${payCount} card payment${payCount>1?"s":""} left out`, skipped && `${skipped} already imported`].filter(Boolean).join(", ") + ".";
+  r.msg = [`${added} sent to Review`, dupCount && `${dupCount} hidden as duplicates`, payCount && `${payCount} card payment${payCount>1?"s":""} left out`, skipped && `${skipped} already imported`, outside && `${outside} outside this paycheck left out`].filter(Boolean).join(", ") + ".";
   render(); saveInbox();
 }
 const CARD_SRC = ["paypal_mc", "chase_amazon"];
@@ -1311,6 +1315,15 @@ document.addEventListener("click", async e => {
   else if (a === "confirm") confirmItems([id]);
   else if (a === "confirm-all") confirmItems(pending().map(i => i.id));
   else if (a === "deny") denyItem(id);
+  else if (a === "deny-all"){
+    const n = pending().length; if (!n) return;
+    openSheet(`<h2>Deny all ${n} charge${n===1?"":"s"}?</h2><p class="muted">None of them will be added, and they won’t come back if you import the same file again.</p><div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Cancel</button><button class="btn danger" data-act="deny-all-confirm">Deny all ${n}</button></div>`);
+  }
+  else if (a === "deny-all-confirm"){
+    const ids = new Set(pending().map(i => i.id));
+    S.inbox.items = S.inbox.items.filter(i => !ids.has(i.id));
+    closeSheet(); render(); await saveInbox(); toast(`${ids.size} denied.`);
+  }
   else if (a === "undup"){ const it = S.inbox.items.find(i => i.id === id); if (it){ it.status = "pending"; delete it.dupNote; render(); saveInbox(); } }
   else if (a === "dismiss-dup"){ S.inbox.items = S.inbox.items.filter(i => i.id !== id); render(); saveInbox(); }
   else if (a === "src"){ S.importSource = el.dataset.src; render(); }
