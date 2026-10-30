@@ -670,9 +670,109 @@ function viewSettings(){
     <p class="small muted" style="margin:12px 0 0">A backup is one file. Keep a copy in Google Drive or email it to yourself. To move your data to another phone or computer, back up here and restore it there.</p>
     <div class="row" style="margin-top:12px"><button class="btn ghost" data-act="export">Export to spreadsheet (CSV)</button>${nRules?'<button class="btn ghost" data-act="clear-rules">Forget learned merchants</button>':""}</div>
   </div>
+  <div class="panel"><h2 style="margin-bottom:6px">Update the app</h2>
+    <p class="muted" style="margin:0 0 12px">Choose the Payday-app.zip you were given and it’s published to your site for you. No manual uploading.</p>
+    <label class="field"><span>GitHub repo</span><input class="input" id="gh-repo" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="yourname/payday" value="${esc(ghCfg().repo || ghGuessRepo())}"></label>
+    <label class="field"><span>GitHub token</span><input class="input" id="gh-token" type="password" autocapitalize="off" autocomplete="off" placeholder="Paste once, saved on this device only" value="${esc(ghCfg().token || "")}"></label>
+    <details style="margin:0 0 14px"><summary class="small muted">How to get a token (one time)</summary><ol class="small muted" style="margin:8px 0 0;padding-left:18px;line-height:1.6"><li>On GitHub: Settings > Developer settings > Personal access tokens > Fine-grained tokens > Generate new token.</li><li>Repository access: Only select repositories, then pick your Payday repo.</li><li>Permissions > Repository permissions > Contents: Read and write.</li><li>Generate, copy it, and paste it above. Anyone with this token can change that repo, so don’t share it.</li></ol></details>
+    <div class="row">
+      <label class="btn" style="display:inline-flex;align-items:center;cursor:pointer">Choose update zip<input type="file" id="updateIn" accept="*/*" style="position:absolute;width:1px;height:1px;opacity:0"></label>
+      <button class="btn ghost" data-act="gh-refresh">Refresh app</button>
+    </div>
+  </div>
   <div class="panel"><h2 style="margin-bottom:6px">Appearance</h2>
     <div class="seg">${[["auto","Match phone"],["light","Light"],["dark","Dark"]].map(([k,l]) => `<button data-act="theme" data-t="${k}" aria-pressed="${(document.documentElement.dataset.theme||"auto")===k}">${l}</button>`).join("")}</div>
   </div>`;
+}
+
+/* ---------- app updates: pick the zip, publish it to GitHub ---------- */
+const GH_KEY = "payday-gh";
+function ghCfg(){ try{ return JSON.parse(localStorage.getItem(GH_KEY)) || {}; }catch(_){ return {}; } }
+function ghSet(o){ try{ localStorage.setItem(GH_KEY, JSON.stringify({...ghCfg(), ...o})); }catch(_){} }
+function ghGuessRepo(){
+  const h = location.hostname; if (!h.endsWith(".github.io")) return "";
+  const owner = h.split(".")[0], seg = location.pathname.split("/")[1];
+  return owner + "/" + (seg && !/\.\w+$/.test(seg) ? seg : h);
+}
+async function gh(path, opt = {}){
+  const c = ghCfg();
+  const res = await fetch("https://api.github.com/repos/" + c.repo + path, {...opt, headers:{Authorization:"Bearer " + c.token, Accept:"application/vnd.github+json", "Content-Type":"application/json"}});
+  if (!res.ok){
+    let m = ""; try{ m = (await res.json()).message; }catch(_){}
+    throw new Error(res.status === 401 ? "GitHub didn’t accept that token." : res.status === 404 ? "GitHub can’t find that repo, or the token doesn’t have access to it." : "GitHub said: " + (m || res.status));
+  }
+  return res.json();
+}
+async function unzip(buf){
+  const dv = new DataView(buf), u8 = new Uint8Array(buf), td = new TextDecoder();
+  let e = -1;
+  for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50){ e = i; break; }
+  if (e < 0) throw new Error("That doesn’t look like a zip file.");
+  const n = dv.getUint16(e + 10, true); let p = dv.getUint32(e + 16, true); const out = [];
+  for (let k = 0; k < n; k++){
+    if (dv.getUint32(p, true) !== 0x02014b50) throw new Error("That zip file looks damaged.");
+    const method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true), nl = dv.getUint16(p + 28, true), el = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true), lo = dv.getUint32(p + 42, true);
+    const name = td.decode(u8.subarray(p + 46, p + 46 + nl)); p += 46 + nl + el + cl;
+    if (name.endsWith("/")) continue;
+    const ds = lo + 30 + dv.getUint16(lo + 26, true) + dv.getUint16(lo + 28, true);
+    let data = u8.subarray(ds, ds + csize);
+    if (method === 8) data = new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer());
+    else if (method !== 0) throw new Error("That zip uses a compression type I can’t read.");
+    out.push({name, data});
+  }
+  return out;
+}
+async function gitSha(data){
+  const h = new TextEncoder().encode("blob " + data.length + "\0"), all = new Uint8Array(h.length + data.length);
+  all.set(h); all.set(data, h.length);
+  return [...new Uint8Array(await crypto.subtle.digest("SHA-1", all))].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+function b64(u8){ let s = ""; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); }
+async function prepareUpdate(file){
+  const c = ghCfg();
+  if (!c.repo || !c.token){ toast("Save your GitHub repo and token first."); return; }
+  toast("Reading the update…");
+  try{
+    const files = (await unzip(await file.arrayBuffer())).filter(f => !/(^|\/)(__MACOSX\/|\.DS_Store$)/.test(f.name));
+    if (files.length && new Set(files.map(f => f.name.split("/")[0])).size === 1 && files.every(f => f.name.includes("/"))) files.forEach(f => { f.name = f.name.slice(f.name.indexOf("/") + 1); });
+    if (!files.some(f => f.name === "index.html")) throw new Error("There’s no index.html at the top of that zip, so I didn’t publish it.");
+    const branch = (await gh("")).default_branch;
+    const ref = await gh("/git/ref/heads/" + branch);
+    const commit = await gh("/git/commits/" + ref.object.sha);
+    const tree = await gh("/git/trees/" + commit.tree.sha + "?recursive=1");
+    const have = new Map(tree.tree.filter(t => t.type === "blob").map(t => [t.path, t.sha]));
+    const changed = [];
+    for (const f of files){ const sha = await gitSha(f.data); if (have.get(f.name) !== sha) changed.push({name: f.name, data: f.data, isNew: !have.has(f.name)}); }
+    if (!changed.length){ toast("Your site already has all of these files."); return; }
+    S.update = {branch, parent: ref.object.sha, baseTree: commit.tree.sha, changed};
+    openSheet(`<h2>Publish ${changed.length} changed file${changed.length===1?"":"s"}?</h2>
+      <p class="muted" style="margin-bottom:8px">Nothing on your site gets deleted. Your data isn’t touched.</p>
+      <div class="small" style="margin-bottom:14px;line-height:1.7">${changed.map(f => `<div>${esc(f.name)}${f.isNew ? ' <span class="muted">(new)</span>' : ""}</div>`).join("")}</div>
+      <div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="gh-push">Publish</button></div>`);
+  }catch(err){ toast(err.message || "Something went wrong reading the update."); }
+}
+async function pushUpdate(){
+  const u = S.update; if (!u) return;
+  closeSheet(); toast("Publishing… keep this open.");
+  try{
+    const entries = [];
+    for (const f of u.changed){
+      const b = await gh("/git/blobs", {method:"POST", body: JSON.stringify({content: b64(f.data), encoding:"base64"})});
+      entries.push({path: f.name, mode:"100644", type:"blob", sha: b.sha});
+    }
+    const t = await gh("/git/trees", {method:"POST", body: JSON.stringify({base_tree: u.baseTree, tree: entries})});
+    const cm = await gh("/git/commits", {method:"POST", body: JSON.stringify({message:"Update Payday from the app", tree: t.sha, parents:[u.parent]})});
+    await gh("/git/refs/heads/" + u.branch, {method:"PATCH", body: JSON.stringify({sha: cm.sha})});
+    S.update = null;
+    openSheet(`<h2>Published</h2><p class="muted">GitHub takes about 2 minutes to put it live. After that, tap Refresh app to load it.</p><div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Close</button><button class="btn" data-act="gh-refresh">Refresh app</button></div>`);
+  }catch(err){ toast(err.message || "Publishing failed. Nothing was changed on your site."); }
+}
+async function refreshApp(){
+  try{
+    const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(r => r.unregister()));
+    const ks = await caches.keys(); await Promise.all(ks.map(k => caches.delete(k)));
+  }catch(_){}
+  location.reload();
 }
 
 /* ---------- sheets ---------- */
@@ -1374,11 +1474,16 @@ document.addEventListener("click", async e => {
   else if (a === "do-restore-cloud") restoreCloudConfirm();
   else if (a === "backup") backupData();
   else if (a === "do-restore") doRestore();
+  else if (a === "gh-push") pushUpdate();
+  else if (a === "gh-refresh") refreshApp();
   else if (a === "install"){ if (installEvt){ installEvt.prompt(); installEvt = null; } }
   else if (a === "clear-rules"){ S.rules = {map:{}}; store.save("rules", S.rules); render(); toast("Learned merchants cleared."); }
   else if (a === "theme"){ const t = el.dataset.t; if (t === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t; try{ localStorage.setItem("payday-theme", t); }catch(_){} render(); }
 });
 document.addEventListener("change", e => {
+  if (e.target.id === "gh-repo"){ ghSet({repo: e.target.value.trim().replace(/^https?:\/\/github\.com\//, "").replace(/\/$/, "")}); return; }
+  if (e.target.id === "gh-token"){ ghSet({token: e.target.value.trim()}); return; }
+  if (e.target.id === "updateIn" && e.target.files.length){ prepareUpdate(e.target.files[0]); e.target.value = ""; return; }
   if (e.target.id === "restoreIn" && e.target.files.length){ readBackup(e.target.files[0]); e.target.value = ""; return; }
   if (e.target.id === "fileIn" && e.target.files.length){ handleFiles([...e.target.files]); e.target.value = ""; }
   const s = e.target.closest("[data-act=imp-src]"); if (s){ const r = S.imports.find(x => x.id === s.dataset.id); if (r){ r.src = s.value; if (r.sig){ S.settings.formats = {...(S.settings.formats || {}), [r.sig]: s.value}; store.save("settings", S.settings); toast(`Got it. Files like this will be marked ${SOURCES[s.value]} from now on.`); } } }

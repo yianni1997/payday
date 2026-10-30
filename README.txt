@@ -1,7 +1,13 @@
 PAYDAY - SETUP GUIDE
 ====================
 
-UPDATING YOUR GITHUB SITE
+UPDATING YOUR SITE FROM INSIDE THE APP (after the one-time setup in Settings > Update the app)
+1. Settings > Update the app > Choose update zip, and pick Payday-app.zip.
+2. Review the list of changed files, tap Publish.
+3. Wait about 2 minutes, then tap Refresh app.
+
+
+UPDATING YOUR GITHUB SITE BY HAND (the old way)
 1. Unzip Payday-app.zip on your computer.
 2. In your GitHub repo: Add file > Upload files. Drag in EVERY file from the zip
    (the old ones get replaced; three firebase-*.js files are new). Commit changes.
