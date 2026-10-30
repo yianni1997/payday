@@ -787,7 +787,8 @@ async function refreshApp(){
 }
 
 /* ---------- live bank connections (Plaid, through your own private server) ---------- */
-const PL = {items: null, busy: "", err: ""};
+const PL = {items: null, busy: "", err: "", pick: null};
+function plaidPick(){ const per = periodList(); return PL.pick && per.includes(PL.pick) ? PL.pick : per[per.length - 1]; }
 const OAUTH_URL = location.search.includes("oauth_state_id") ? location.href : null; // set when a bank sends you back from signing in
 const minIso = (a, b) => a < b ? a : b;
 const plaidUrl = () => (S.settings.plaidUrl || "").trim();
@@ -862,7 +863,7 @@ const plaidSrc = (inst, a) => (S.settings.plaidMap || {})[a.id] || plaidGuess(in
 async function plaidPull(){
   const per = periodList();
   if (!per.length){ toast("Add a paycheck first so I know which dates to pull."); return; }
-  const start = per[per.length - 1], end = minIso(periodEnd(start), todayIso());
+  const start = plaidPick(), end = minIso(periodEnd(start), todayIso()), past = start !== per[per.length - 1];
   plaidSet("Pulling " + short(start) + " to " + short(end) + "…");
   try{
     const res = await plaidCall("sync", {start, end});
@@ -884,19 +885,20 @@ async function plaidPull(){
     PL.items = null;
     const msgs = [];
     for (const [src, items] of Object.entries(groups)){
-      const r = {id: uid(), name: SOURCES[src] + " (live)", state:"parsing", flip:false, items, src};
+      const r = {id: uid(), name: SOURCES[src] + " (live)", state:"parsing", flip:false, items, src, range: [start, end]};
       S.imports.unshift(r); addImport(r); msgs.push(r.msg);
     }
     plaidSet("");
-    if (!total) toast(notes.length ? notes.join(". ") + "." : "Nothing new in that date range yet.");
+    if (!total) toast(notes.length ? notes.join(". ") + "." : past ? "Nothing new for that paycheck. Either it’s all imported already, or the bank doesn’t share history that far back." : "Nothing new in that date range yet.");
     else { go("review"); toast([`Pulled ${total} charge${total===1?"":"s"}`, pendingSkipped && `${pendingSkipped} still pending, skipped`, ...notes].filter(Boolean).join(". ") + "."); }
     plaidLoad();
   }catch(e){ plaidSet("", e.message); }
 }
 function viewAccounts(){
   const url = plaidUrl(), signed = !!FB.user, ready = url && signed, items = PL.items || [];
-  const per = periodList(), cur = per.length ? per[per.length - 1] : null;
+  const per = periodList(), latest = per.length ? per[per.length - 1] : null, cur = per.length ? plaidPick() : null;
   const range = cur ? `${short(cur)} to ${short(minIso(periodEnd(cur), todayIso()))}` : "";
+  const pickOpts = per.slice().reverse().map(p => `<option value="${p}" ${p===cur?"selected":""}>${short(p)} to ${short(minIso(periodEnd(p), todayIso()))}${p===latest?" (current)":""}</option>`).join("");
   const srcOpts = sel => Object.entries(SOURCES).filter(([k]) => !["manual","sheet"].includes(k)).map(([k,l]) => `<option value="${k}" ${sel===k?"selected":""}>${l}</option>`).join("") + `<option value="off" ${sel==="off"?"selected":""}>Don’t pull this one</option>`;
   const busy = PL.busy ? `<div class="notice" style="margin-bottom:12px">${esc(PL.busy)}</div>` : "";
   const err = PL.err ? `<div class="notice" style="margin-bottom:12px;color:var(--neg)">${esc(PL.err)}</div>` : "";
@@ -910,8 +912,10 @@ function viewAccounts(){
   return `<div class="topbar"><h1>Accounts</h1></div>
   <p class="muted" style="margin:0 0 12px">Connect PayPal and Chase once, then pull everything for this paycheck with one tap. Charges land in Review like any import.</p>
   ${busy}${err}
-  ${ready && items.length ? `<div class="panel"><button class="btn yellow" data-act="plaid-pull" ${PL.busy?"disabled":""} style="width:100%">Pull this paycheck (${esc(range)})</button>
-    <p class="small muted" style="margin:10px 0 0">Gets every connected account at once. Pending charges are skipped until they post. Anything already imported or confirmed is skipped automatically.</p></div>` : ""}
+  ${ready && items.length ? `<div class="panel">
+    <label class="field" style="margin-bottom:12px"><span>Which paycheck</span><select class="input" data-act="plaid-period" aria-label="Which paycheck to pull">${pickOpts}</select></label>
+    <button class="btn yellow" data-act="plaid-pull" ${PL.busy?"disabled":""} style="width:100%">${cur === latest ? "Pull this paycheck" : "Pull the " + esc(short(cur)) + " paycheck"} (${esc(range)})</button>
+    <p class="small muted" style="margin:10px 0 0">Gets every connected account at once. Pending charges are skipped until they post. Anything already imported or confirmed is skipped automatically, so pulling an older paycheck won’t double anything up.${cur !== latest ? " Banks usually share about 90 days of history from when you connected, so very old paychecks may come back empty." : ""}</p></div>` : ""}
   <div class="panel"><h2 style="margin-bottom:6px">Connected accounts</h2>
     ${!url ? `<p class="muted" style="margin:0 0 10px">One-time setup needed: follow SETUP-PLAID.txt (it’s in your update zip), then paste your server link below.</p>` : ""}
     ${url && !signed ? `<div class="notice" style="margin-bottom:10px">Sign in with Google in Settings first. That’s how your private server knows it’s you.</div>` : ""}
@@ -1186,7 +1190,7 @@ function addImport(r){
   const within = (a, b, n) => Math.abs((toD(a) - toD(b)) / 864e5) <= n;
   for (const raw of items){
     const base = `${r.src}|${raw.date}|${raw.flow.toFixed(2)}|${norm(raw.desc)}`;
-    { const rg = curRange(); if (rg && !(raw.date >= rg[0] && raw.date <= rg[1]) && !(raw.pay || (raw.flow > 0 && PAYCHECK_RE.test(raw.desc)) && raw.date >= rg[0])){ outside++; continue; } }
+    { const rg = r.range || curRange(); if (rg && !(raw.date >= rg[0] && raw.date <= rg[1]) && !(raw.pay || (raw.flow > 0 && PAYCHECK_RE.test(raw.desc)) && raw.date >= rg[0])){ outside++; continue; } }
     counts[base] = (counts[base] || 0) + 1;
     const fp = hash(base + "#" + counts[base]);
     if (seen.has(fp)){ skipped++; continue; }
@@ -1642,6 +1646,7 @@ document.addEventListener("click", async e => {
 document.addEventListener("input", e => { if (e.target.id === "gh-repo" || e.target.id === "gh-token") ghRead(); });
 document.addEventListener("change", e => {
   if (e.target.id === "plaid-url"){ S.settings = {...S.settings, plaidUrl: e.target.value.trim(), kind:"settings"}; store.save("settings", S.settings); PL.items = null; PL.err = ""; render(); plaidAutoLoad(); return; }
+  if (e.target.dataset && e.target.dataset.act === "plaid-period"){ PL.pick = e.target.value; render(); return; }
   if (e.target.dataset && e.target.dataset.act === "plaid-map"){ S.settings = {...S.settings, plaidMap: {...(S.settings.plaidMap || {}), [e.target.dataset.id]: e.target.value}, kind:"settings"}; store.save("settings", S.settings); toast("Got it."); return; }
   if (e.target.id === "gh-repo"){ ghSet({repo: e.target.value.trim().replace(/^https?:\/\/github\.com\//, "").replace(/\/$/, "")}); return; }
   if (e.target.id === "gh-token"){ ghSet({token: e.target.value.trim()}); return; }
