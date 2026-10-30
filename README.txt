@@ -1,6 +1,9 @@
 PAYDAY - SETUP GUIDE
 ====================
 
+LIVE BANK PULLS: see SETUP-PLAID.txt (Accounts tab).
+
+
 UPDATING YOUR SITE FROM INSIDE THE APP (after the one-time setup in Settings > Update the app)
 1. Settings > Update the app > Choose update zip, and pick Payday-app.zip.
 2. Review the list of changed files, tap Publish.

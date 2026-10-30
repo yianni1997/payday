@@ -404,12 +404,13 @@ const ICONS = {
   home:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M7 15h4"/></svg>',
   review:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13l2.5-8h11L20 13v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/><path d="M4 13h4.5l1 2h5l1-2H20"/></svg>',
   import:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg>',
+  accounts:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10l9-6 9 6M5 10v7M9.5 10v7M14.5 10v7M19 10v7M3 20h18"/></svg>',
   trends:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 20V12M10 20V6M15 20v-9M20 20V4"/></svg>',
   settings:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>',
   left:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
   right:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>'
 };
-const TABS = [["home","Paycheck"],["review","Review"],["import","Import"],["trends","Trends"],["settings","Settings"]];
+const TABS = [["home","Paycheck"],["review","Review"],["import","Import"],["accounts","Accounts"],["trends","Trends"],["settings","Settings"]];
 function renderTabs(){
   const n = pending().length;
   $("#tabs").innerHTML = '<div class="brand">Payday</div>' + TABS.map(([k,l]) =>
@@ -423,10 +424,11 @@ function render(){
   if (S.view === "home") m.innerHTML = viewHome();
   else if (S.view === "review") m.innerHTML = viewReview();
   else if (S.view === "import") m.innerHTML = viewImport();
+  else if (S.view === "accounts") m.innerHTML = viewAccounts();
   else if (S.view === "trends") m.innerHTML = viewTrends();
   else m.innerHTML = viewSettings();
 }
-function go(view){ S.sel = null; S.view = view; render(); window.scrollTo(0,0); }
+function go(view){ S.sel = null; S.view = view; render(); window.scrollTo(0,0); if (view === "accounts") plaidAutoLoad(); }
 
 function viewHome(){
   const list = periodList();
@@ -689,6 +691,15 @@ function viewSettings(){
 const GH_KEY = "payday-gh";
 function ghCfg(){ try{ return JSON.parse(localStorage.getItem(GH_KEY)) || {}; }catch(_){ return {}; } }
 function ghSet(o){ try{ localStorage.setItem(GH_KEY, JSON.stringify({...ghCfg(), ...o})); }catch(_){} }
+function ghRead(){
+  const r = document.getElementById("gh-repo"), t = document.getElementById("gh-token");
+  const o = {};
+  if (r && r.value.trim()) o.repo = r.value.trim().replace(/^https?:\/\/github\.com\//, "").replace(/\/$/, "");
+  if (t && t.value.trim()) o.token = t.value.trim();
+  if (Object.keys(o).length) ghSet(o);
+  const c = ghCfg(); if (!c.repo && ghGuessRepo()) c.repo = ghGuessRepo();
+  return c;
+}
 function ghGuessRepo(){
   const h = location.hostname; if (!h.endsWith(".github.io")) return "";
   const owner = h.split(".")[0], seg = location.pathname.split("/")[1];
@@ -729,7 +740,7 @@ async function gitSha(data){
 }
 function b64(u8){ let s = ""; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); }
 async function prepareUpdate(file){
-  const c = ghCfg();
+  const c = ghRead(); if (c.repo) ghSet({repo: c.repo});
   if (!c.repo || !c.token){ toast("Save your GitHub repo and token first."); return; }
   toast("Reading the update…");
   try{
@@ -773,6 +784,145 @@ async function refreshApp(){
     const ks = await caches.keys(); await Promise.all(ks.map(k => caches.delete(k)));
   }catch(_){}
   location.reload();
+}
+
+/* ---------- live bank connections (Plaid, through your own private server) ---------- */
+const PL = {items: null, busy: "", err: ""};
+const OAUTH_URL = location.search.includes("oauth_state_id") ? location.href : null; // set when a bank sends you back from signing in
+const minIso = (a, b) => a < b ? a : b;
+const plaidUrl = () => (S.settings.plaidUrl || "").trim();
+async function plaidCall(action, body = {}){
+  if (!plaidUrl()) throw new Error("Paste your Payday server link first.");
+  if (!FB.user) throw new Error("Sign in with Google in Settings first. That’s how your server knows it’s you.");
+  const tok = await FB.user.getIdToken();
+  let res;
+  try{ res = await fetch(plaidUrl(), {method:"POST", headers:{"Content-Type":"application/json", Authorization:"Bearer " + tok}, body: JSON.stringify({action, ...body})}); }
+  catch(_){ throw new Error("Couldn’t reach your server. Check the link, and that setup step 'Allowed origin' matches your site."); }
+  let j = {}; try{ j = await res.json(); }catch(_){}
+  if (!res.ok) throw new Error(j.error || "Your server said " + res.status + ".");
+  return j;
+}
+function plaidSet(busy, err){ PL.busy = busy || ""; PL.err = err || ""; if (S.view === "accounts") render(); }
+async function plaidLoad(){
+  plaidSet("Loading your accounts…");
+  try{ PL.items = (await plaidCall("items")).items; plaidSet(""); }
+  catch(e){ PL.items = PL.items || []; plaidSet("", e.message); }
+}
+function plaidAutoLoad(){ if (plaidUrl() && FB.user && PL.items === null && !PL.busy) plaidLoad(); }
+function loadPlaidLink(){
+  return new Promise((ok, bad) => {
+    if (window.Plaid) return ok();
+    const sc = document.createElement("script"); sc.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
+    sc.onload = ok; sc.onerror = () => bad(new Error("Couldn’t load Plaid. Check your connection.")); document.head.appendChild(sc);
+  });
+}
+const plaidRedirect = () => location.origin + location.pathname.replace(/index\.html$/, "");
+async function openLink(token, itemId, received){
+  await loadPlaidLink();
+  const h = Plaid.create({
+    token, receivedRedirectUri: received || undefined,
+    onSuccess: async (pub) => {
+      lsSet("payday-plaid-link", null);
+      try{
+        if (itemId){ plaidSet("Refreshing…"); await plaidLoad(); toast("Reconnected."); return; }
+        plaidSet("Saving the connection…");
+        const r = await plaidCall("exchange", {public_token: pub});
+        toast(r.institution + " connected. Give it a minute before the first pull.");
+        await plaidLoad();
+      }catch(e){ plaidSet("", e.message); }
+    },
+    onExit: (err) => { lsSet("payday-plaid-link", null); plaidSet("", err ? (err.display_message || err.error_message || "") : ""); },
+  });
+  h.open();
+}
+async function plaidConnect(itemId){
+  try{
+    plaidSet("Opening Plaid…");
+    const r = await plaidCall("link_token", {itemId: itemId || undefined, redirect: plaidRedirect()});
+    lsSet("payday-plaid-link", JSON.stringify({token: r.link_token, itemId: itemId || null}));
+    plaidSet("");
+    await openLink(r.link_token, itemId);
+  }catch(e){ plaidSet("", e.message); }
+}
+function plaidResumeOAuth(){
+  if (!OAUTH_URL || PL.resumed || !FB.user) return;
+  PL.resumed = true;
+  let saved = null; try{ saved = JSON.parse(lsGet("payday-plaid-link") || "null"); }catch(_){}
+  history.replaceState(null, "", location.pathname);
+  S.view = "accounts"; render();
+  if (!saved) { plaidSet("", "That bank sign-in got interrupted. Tap Connect a bank to try again."); return; }
+  openLink(saved.token, saved.itemId, OAUTH_URL).catch(e => plaidSet("", e.message));
+}
+function plaidGuess(inst, a){
+  if (/paypal|synchrony/i.test(inst)) return a.type === "credit" ? "paypal_mc" : "paypal";
+  if (/chase/i.test(inst)) return a.type === "credit" ? "chase_amazon" : a.subtype === "checking" ? "chase_bank" : "other";
+  return "other";
+}
+const plaidSrc = (inst, a) => (S.settings.plaidMap || {})[a.id] || plaidGuess(inst, a);
+async function plaidPull(){
+  const per = periodList();
+  if (!per.length){ toast("Add a paycheck first so I know which dates to pull."); return; }
+  const start = per[per.length - 1], end = minIso(periodEnd(start), todayIso());
+  plaidSet("Pulling " + short(start) + " to " + short(end) + "…");
+  try{
+    const res = await plaidCall("sync", {start, end});
+    const groups = {}, notes = []; let pendingSkipped = 0, total = 0;
+    for (const it of res.items){
+      if (it.error){
+        notes.push(it.institution + (it.error.code === "ITEM_LOGIN_REQUIRED" ? " needs you to log in again" : it.error.code === "PRODUCT_NOT_READY" ? " is still getting ready, try again in a minute" : ": " + it.error.message));
+        continue;
+      }
+      const byId = Object.fromEntries(it.accounts.map(a => [a.id, a]));
+      for (const t of it.transactions){
+        const a = byId[t.accountId]; if (!a) continue;
+        const src = plaidSrc(it.institution, a); if (src === "off") continue;
+        if (t.pending){ pendingSkipped++; continue; }
+        (groups[src] = groups[src] || []).push({date: t.date, desc: (t.merchant || t.name || "Charge").trim(), flow: -t.amount});
+        total++;
+      }
+    }
+    PL.items = null;
+    const msgs = [];
+    for (const [src, items] of Object.entries(groups)){
+      const r = {id: uid(), name: SOURCES[src] + " (live)", state:"parsing", flip:false, items, src};
+      S.imports.unshift(r); addImport(r); msgs.push(r.msg);
+    }
+    plaidSet("");
+    if (!total) toast(notes.length ? notes.join(". ") + "." : "Nothing new in that date range yet.");
+    else { go("review"); toast([`Pulled ${total} charge${total===1?"":"s"}`, pendingSkipped && `${pendingSkipped} still pending, skipped`, ...notes].filter(Boolean).join(". ") + "."); }
+    plaidLoad();
+  }catch(e){ plaidSet("", e.message); }
+}
+function viewAccounts(){
+  const url = plaidUrl(), signed = !!FB.user, ready = url && signed, items = PL.items || [];
+  const per = periodList(), cur = per.length ? per[per.length - 1] : null;
+  const range = cur ? `${short(cur)} to ${short(minIso(periodEnd(cur), todayIso()))}` : "";
+  const srcOpts = sel => Object.entries(SOURCES).filter(([k]) => !["manual","sheet"].includes(k)).map(([k,l]) => `<option value="${k}" ${sel===k?"selected":""}>${l}</option>`).join("") + `<option value="off" ${sel==="off"?"selected":""}>Don’t pull this one</option>`;
+  const busy = PL.busy ? `<div class="notice" style="margin-bottom:12px">${esc(PL.busy)}</div>` : "";
+  const err = PL.err ? `<div class="notice" style="margin-bottom:12px;color:var(--neg)">${esc(PL.err)}</div>` : "";
+  const list = items.map(it => `<div style="border-top:1px solid var(--line);padding:12px 0">
+      <div class="row" style="justify-content:space-between"><b>${esc(it.institution)}</b>
+        <span>${it.error ? `<button class="btn sm" data-act="plaid-relogin" data-id="${esc(it.itemId)}">Log in again</button> ` : ""}<button class="btn ghost sm" data-act="plaid-remove" data-id="${esc(it.itemId)}">Remove</button></span></div>
+      ${it.error ? `<div class="small" style="color:var(--neg);margin-top:4px">${esc(it.error.code === "ITEM_LOGIN_REQUIRED" ? "The bank needs you to sign in again." : it.error.message)}</div>` : ""}
+      ${it.accounts.map(a => `<div class="row" style="justify-content:space-between;margin-top:8px"><span class="small">${esc(a.name)}${a.mask ? " ••" + esc(a.mask) : ""}</span>
+        <select class="input" style="width:auto;min-height:38px;padding:6px 10px" data-act="plaid-map" data-id="${esc(a.id)}" aria-label="Where ${esc(a.name)} goes">${srcOpts(plaidSrc(it.institution, a))}</select></div>`).join("")}
+    </div>`).join("");
+  return `<div class="topbar"><h1>Accounts</h1></div>
+  <p class="muted" style="margin:0 0 12px">Connect PayPal and Chase once, then pull everything for this paycheck with one tap. Charges land in Review like any import.</p>
+  ${busy}${err}
+  ${ready && items.length ? `<div class="panel"><button class="btn yellow" data-act="plaid-pull" ${PL.busy?"disabled":""} style="width:100%">Pull this paycheck (${esc(range)})</button>
+    <p class="small muted" style="margin:10px 0 0">Gets every connected account at once. Pending charges are skipped until they post. Anything already imported or confirmed is skipped automatically.</p></div>` : ""}
+  <div class="panel"><h2 style="margin-bottom:6px">Connected accounts</h2>
+    ${!url ? `<p class="muted" style="margin:0 0 10px">One-time setup needed: follow SETUP-PLAID.txt (it’s in your update zip), then paste your server link below.</p>` : ""}
+    ${url && !signed ? `<div class="notice" style="margin-bottom:10px">Sign in with Google in Settings first. That’s how your private server knows it’s you.</div>` : ""}
+    ${list || (ready && items.length === 0 && !PL.busy ? `<p class="muted" style="margin:0 0 10px">Nothing connected yet.</p>` : "")}
+    ${ready ? `<div class="row" style="margin-top:12px"><button class="btn" data-act="plaid-connect" ${PL.busy?"disabled":""}>Connect a bank</button><button class="btn ghost" data-act="plaid-refresh" ${PL.busy?"disabled":""}>Refresh list</button></div>` : ""}
+    <p class="small muted" style="margin:12px 0 0">Tip: connect from Chrome, not the installed app icon. Chase sends you to its own sign-in and back, and that round trip is more reliable in the browser.</p>
+  </div>
+  <div class="panel"><h2 style="margin-bottom:6px">Your server link</h2>
+    <label class="field"><span>Link from your Google Cloud function</span><input class="input" id="plaid-url" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="https://…run.app" value="${esc(url)}"></label>
+  </div>
+  <p class="small muted">The PayPal Mastercard may not connect (it’s issued by Synchrony and often isn’t supported). If it doesn’t, keep importing it from a CSV or PDF on the Import tab. PDF statements are supported there too.</p>`;
 }
 
 /* ---------- sheets ---------- */
@@ -1175,7 +1325,7 @@ function initFirebase(){
     if (!firebase.apps.length) firebase.initializeApp(cfg);
     FB.auth = firebase.auth(); FB.db = firebase.firestore();
     FB.db.enablePersistence({synchronizeTabs:true}).catch(() => {});
-    FB.auth.onAuthStateChanged(u => { FB.user = u; if (u) attachCloud(u); else detachCloud(); render(); });
+    FB.auth.onAuthStateChanged(u => { FB.user = u; if (u) attachCloud(u); else detachCloud(); render(); if (u){ plaidResumeOAuth(); if (S.view === "accounts") plaidAutoLoad(); } });
   }catch(e){ toast("That Firebase setup didn’t work. Remove it in Settings and paste it again."); }
 }
 function mergeDocs(cloud, local){
@@ -1474,13 +1624,25 @@ document.addEventListener("click", async e => {
   else if (a === "do-restore-cloud") restoreCloudConfirm();
   else if (a === "backup") backupData();
   else if (a === "do-restore") doRestore();
+  else if (a === "plaid-connect") plaidConnect();
+  else if (a === "plaid-relogin") plaidConnect(id);
+  else if (a === "plaid-refresh") plaidLoad();
+  else if (a === "plaid-pull") plaidPull();
+  else if (a === "plaid-remove"){
+    const it = (PL.items || []).find(x => x.itemId === id); if (!it) return;
+    openSheet(`<h2>Remove ${esc(it.institution)}?</h2><p class="muted">This disconnects it from Plaid. Charges you’ve already imported stay put.</p><div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Cancel</button><button class="btn danger" data-act="plaid-remove-confirm" data-id="${esc(id)}">Remove</button></div>`);
+  }
+  else if (a === "plaid-remove-confirm"){ closeSheet(); plaidSet("Removing…"); try{ await plaidCall("remove", {itemId: id}); PL.items = null; await plaidLoad(); toast("Removed."); }catch(e){ plaidSet("", e.message); } }
   else if (a === "gh-push") pushUpdate();
   else if (a === "gh-refresh") refreshApp();
   else if (a === "install"){ if (installEvt){ installEvt.prompt(); installEvt = null; } }
   else if (a === "clear-rules"){ S.rules = {map:{}}; store.save("rules", S.rules); render(); toast("Learned merchants cleared."); }
   else if (a === "theme"){ const t = el.dataset.t; if (t === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t; try{ localStorage.setItem("payday-theme", t); }catch(_){} render(); }
 });
+document.addEventListener("input", e => { if (e.target.id === "gh-repo" || e.target.id === "gh-token") ghRead(); });
 document.addEventListener("change", e => {
+  if (e.target.id === "plaid-url"){ S.settings = {...S.settings, plaidUrl: e.target.value.trim(), kind:"settings"}; store.save("settings", S.settings); PL.items = null; PL.err = ""; render(); plaidAutoLoad(); return; }
+  if (e.target.dataset && e.target.dataset.act === "plaid-map"){ S.settings = {...S.settings, plaidMap: {...(S.settings.plaidMap || {}), [e.target.dataset.id]: e.target.value}, kind:"settings"}; store.save("settings", S.settings); toast("Got it."); return; }
   if (e.target.id === "gh-repo"){ ghSet({repo: e.target.value.trim().replace(/^https?:\/\/github\.com\//, "").replace(/\/$/, "")}); return; }
   if (e.target.id === "gh-token"){ ghSet({token: e.target.value.trim()}); return; }
   if (e.target.id === "updateIn" && e.target.files.length){ prepareUpdate(e.target.files[0]); e.target.value = ""; return; }

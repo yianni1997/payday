@@ -1,0 +1,54 @@
+LIVE BANK CONNECTIONS (PLAID) - ONE-TIME SETUP, about 30 minutes, easiest on a computer
+=====================================================================================
+What this does: the Accounts tab connects Chase and PayPal. One tap then pulls every
+charge for your current paycheck into Review. Your Plaid keys live on a tiny private
+server in YOUR Google account. The app and GitHub never see them.
+
+You need the Sync / Google sign-in from README.txt already working (same Firebase project).
+
+PART A - PLAID (plaid.com)
+1. Go to dashboard.plaid.com/signup. Choose "Personal use". This is the free Trial plan
+   (real bank data, up to 10 connected logins). Confirm "Transactions" is included.
+2. In the dashboard open Developers > Keys. Copy your client_id and your Production secret.
+3. Developers > API > Allowed redirect URIs: add your site address EXACTLY, with the
+   slash at the end, for example:   https://yianni1997.github.io/Payday/
+   (Chase signs you in on its own page and sends you back here, so this is required.)
+
+PART B - YOUR PRIVATE SERVER (console.cloud.google.com)
+1. Open console.cloud.google.com and pick your Payday project (the same one as Firebase).
+2. Billing: this needs the pay-as-you-go plan (Firebase "Blaze"). Personal use of this
+   server stays inside Google's free monthly allowance, but add a budget alert anyway.
+3. Search for "Cloud Run functions" > Create function.
+   - Service name: payday-server        - Region: same as your database if offered
+   - Trigger: HTTPS, Authentication: "Allow unauthenticated invocations"
+     (safe: the code itself only answers your Google account)
+   - Expand "Container, networking, security" > Variables & secrets > add these variables:
+       PLAID_CLIENT_ID   = (from step A2)
+       PLAID_SECRET      = (from step A2)
+       PLAID_ENV         = production
+       ALLOWED_ORIGIN    = https://yianni1997.github.io        (origin only, NO path)
+       ALLOWED_EMAIL     = the Google email you sign in to Payday with
+   - Next. Runtime: Node.js 20 (or newer). Entry point: payday
+   - In the inline editor, replace the contents of index.js and package.json with the two
+     files in the "server" folder of the Payday zip. Click Deploy and wait a few minutes.
+4. Open the deployed function, copy its URL (looks like https://...run.app).
+
+PART C - IN PAYDAY
+1. Settings > sign in with Google.
+2. Accounts tab > paste the URL under "Your server link".
+3. Tap Connect a bank. Do Chase first (checking and the Amazon Visa come in together),
+   then PayPal. Do this from Chrome, not the home-screen app icon.
+4. Under each connected account, check the dropdown says the right source
+   (Chase checking, Chase Amazon card, PayPal activity, PayPal Mastercard...).
+5. Tap "Pull this paycheck". Charges for this paycheck appear in Review.
+   Pending charges are skipped until they post. Re-pulling is safe: anything already
+   imported or confirmed is skipped.
+
+GOOD TO KNOW
+- The PayPal Mastercard is issued by Synchrony and often can't be connected. If it doesn't
+  show up, keep using a CSV or PDF for it on the Import tab (PDF import is built in).
+- If Chase says it isn't available or asks for approval, Plaid may need you to finish an
+  OAuth/institution approval step in its dashboard. Look for it there.
+- Your bank login goes to Plaid and the bank only. Plaid's access token is stored in a
+  database collection the app itself cannot read (your Firestore rules only open users/<you>).
+- To disconnect a bank: Accounts tab > Remove.
