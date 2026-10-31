@@ -810,7 +810,7 @@ function fundSeg(it){
 function fixWaitingDirections(){
   let n = 0;
   const bills = S.inbox.items.filter(it => it.status === "pending" && isCardPayment(it));
-  if (bills.length){ S.inbox.items = S.inbox.items.filter(it => !bills.includes(it)); setTimeout(() => { saveInbox(); toast(`Left out ${bills.length} card bill payment${bills.length===1?"":"s"}. Those charges are already counted one by one.`); }, 0); }
+  if (bills.length){ S.inbox.items = S.inbox.items.filter(it => !bills.includes(it)); setTimeout(() => { saveInbox(); toast(`Left out ${bills.length} card payment${bills.length===1?"":"s"} or PayPal reload${bills.length===1?"":"s"}. That money is counted when you actually spend it.`); }, 0); }
   let nSave = 0;
   for (const it of S.inbox.items) if (it.status === "pending" && it.flow < 0 && it.fund !== "savings" && !it.saveChecked){ it.saveChecked = true; if (isSavingsMove(it)){ it.fund = "savings"; nSave++; } }
   if (nSave) setTimeout(() => { saveInbox(); toast(`${nSave} payment${nSave===1?"":"s"} to yourself set to Moved to savings.`); }, 0);
@@ -1218,7 +1218,7 @@ const PULL_KINDS = [
   ["review", "Sent to Review", "var(--savings)"],
   ["dup", "Hidden as duplicates", "var(--gas)"],
   ["seen", "Already imported", "var(--muted)"],
-  ["paid", "Card payments left out", "var(--muted)"],
+  ["paid", "Card payments and PayPal reloads left out", "var(--muted)"],
   ["outside", "Outside this paycheck", "var(--muted)"],
   ["pending", "Pending, not posted yet", "var(--muted)"],
   ["off", "From accounts set to “Don’t pull”", "var(--muted)"]
@@ -1591,7 +1591,7 @@ function addImport(r){
     fixDirection(it, raw.desc); applyShare(it, raw.desc);
     it.fund = suggest(it);
     const nm = (S.rules.names || {})[norm(raw.desc)]; if (nm) it.desc = nm;
-    if (raw.pay || isCardPayment(it)){ payCount++; L(raw, "paid", "Paying off a card isn’t new spending."); continue; }
+    if (raw.pay || isCardPayment(it)){ payCount++; L(raw, "paid", isOwnReload(it) ? "Moving your own money into PayPal isn’t spending. It’s counted when you use it." : "Paying off a card isn’t new spending."); continue; }
     // already confirmed (spreadsheet, manual, or earlier import)?
     const amt = it.flow < 0 ? -it.flow : it.flow;
     const hitC = confirmed.find(t => !used.has(t.id) && Math.abs(Math.abs(+t.amount) - amt) < 0.005 && within(t.date, it.date, 4) && (t.fund === "income") === (it.flow > 0 && it.fund === "income"));
@@ -1617,8 +1617,18 @@ function isCardPayment(it){
   // Paying off a card isn't spending: on the card it shows as a credit, at Chase checking as a debit to the card company.
   if (it.flow > 0 && CARD_SRC.includes(it.src) && CARD_PAY_RE.test(it.desc) && !/refund|return/i.test(it.desc)) return true;
   if (it.flow < 0 && it.src === "chase_bank" && TRANSFER_RE.test(it.desc)) return true;
+  if (isOwnReload(it)) return true;
   // Paying a card bill from PayPal or anywhere else: the card's own charges are already counted one by one.
   if (it.flow < 0 && CARD_BILL_RE.test(it.orig || it.desc) && !/money transfer from|cash ?back reward|refund/i.test(it.orig || it.desc)) return true;
+  return false;
+}
+// Reloading your own PayPal from Chase (shows at Chase as "Visa Direct" with your name). The spending is counted when you use the money in PayPal.
+function isOwnReload(it){
+  const t = [it.desc, it.orig].filter(Boolean).join(" ");
+  const last = String(S.settings.selfName || "").trim().split(/\s+/).slice(-1)[0];
+  if (it.flow < 0 && /visa direct/i.test(t) && last && t.toLowerCase().includes(last.toLowerCase())) return true;
+  if (it.flow < 0 && /paypal.*(add (to )?balance|add funds|add money)/i.test(t)) return true;
+  if (it.flow > 0 && it.src === "paypal" && /add(ed)? (funds|money)|money added|from (your )?(bank|debit card)|instant transfer from/i.test(t)) return true;
   return false;
 }
 const CARD_BILL_RE = /paypal cashback mastercard|paypal cash back mastercard|paypal mastercard|paypal credit card|synchrony|syncb|chase card services|chase credit crd|payment to chase card|amazon (prime )?(store )?card|credit card (bill|payment)|card payment|epay/i;
