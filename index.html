@@ -174,6 +174,10 @@ textarea.input{min-height:120px;font-family:ui-monospace,Menlo,Consolas,monospac
 .status{display:flex;align-items:center;gap:8px;font-weight:700}
 .status i{width:10px;height:10px;border-radius:5px;background:var(--savings);display:inline-block}
 .status.off i{background:var(--line)}
+.selbar{position:sticky;top:env(safe-area-inset-top,0px);z-index:6;background:var(--bg);padding:10px 0 12px;margin:0 0 12px;border-bottom:1px solid var(--line)}
+.selbar .row{gap:8px}
+.rv.picked{border-color:var(--ink);box-shadow:0 0 0 1.5px var(--ink) inset}
+.rck{width:24px;height:24px;flex:none;margin:2px 4px 0 0;accent-color:var(--ink);cursor:pointer}
 .rv .note{font-size:13px;background:var(--sunk);border-radius:8px;padding:6px 10px;margin-top:10px}
 .chip{display:inline-block;font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--sunk);color:var(--ink)}
 .bulk{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:10px 0 16px}
@@ -469,7 +473,7 @@ function render(){
   else if (S.view === "search") m.innerHTML = viewSearch();
   else m.innerHTML = viewSettings();
 }
-function go(view){ S.sel = null; S.view = view; render(); window.scrollTo(0,0); if (view === "accounts") plaidAutoLoad(); }
+function go(view){ S.sel = null; S.rsel = null; S.view = view; render(); window.scrollTo(0,0); if (view === "accounts") plaidAutoLoad(); }
 
 
 /* ---------- Amazon orders: import your order history and link it to charges ---------- */
@@ -807,10 +811,11 @@ function viewReview(){
   if (!items.length && !dups.length) return head + `<div class="list"><div class="empty"><h3>All caught up</h3>Import a statement and new charges will show up here for you to confirm.<div style="margin-top:14px"><button class="btn" data-tab="import">Import a statement</button></div></div></div>`;
   const body = items.map((it, ix) => {
     const pIn = periodFor(it.date);
-    const hdr = multi && (ix === 0 || periodFor(items[ix-1].date) !== pIn) ? `<h3 style="margin:${ix?22:4}px 0 8px">${pIn === latestP ? "This paycheck" : "Past paycheck"}: ${esc(short(pIn))} to ${esc(short(minIso(periodEnd(pIn), todayIso())))} <span class="muted small">(${items.filter(x => periodFor(x.date) === pIn).length})</span></h3>` : "";
+    const hdr = multi && (ix === 0 || periodFor(items[ix-1].date) !== pIn) ? `<h3 style="margin:${ix?22:4}px 0 8px">${pIn === latestP ? "This paycheck" : "Past paycheck"}: ${esc(short(pIn))} to ${esc(short(minIso(periodEnd(pIn), todayIso())))} <span class="muted small">(${items.filter(x => periodFor(x.date) === pIn).length})</span>${S.rsel ? ` <button class="btn ghost sm" style="min-height:30px;padding:3px 10px;margin-left:6px" data-act="rsel-period" data-p="${esc(pIn)}">Select these</button>` : ""}</h3>` : "";
     const where = it.fund === "paycheck" ? `Starts a new paycheck on ${short(it.date)}` : it.fund === "skip" ? "Won’t be counted" : pIn ? `Goes in the ${short(pIn)} paycheck` : "";
-    return hdr + `<article class="rv">
-      <div class="top"><div class="mid"><button class="desc linkish" data-act="edit-item" data-id="${esc(it.id)}" aria-label="Rename or add details">${esc(it.desc)}<span class="pen" aria-hidden="true">✎</span></button>${it.details?`<div class="details">${esc(it.details)}</div>`:""}<div class="meta">${esc(short(it.date))} • <span class="chip">${esc(SOURCES[it.src]||it.src)}</span></div></div>
+    const picked = S.rsel && S.rsel.has(it.id);
+    return hdr + `<article class="rv ${picked ? "picked" : ""}">
+      <div class="top">${S.rsel ? `<input type="checkbox" class="rck" data-rsel="${esc(it.id)}" ${picked ? "checked" : ""} aria-label="Select ${esc(it.desc)}">` : ""}<div class="mid"><button class="desc linkish" data-act="edit-item" data-id="${esc(it.id)}" aria-label="Rename or add details">${esc(it.desc)}<span class="pen" aria-hidden="true">✎</span></button>${it.details?`<div class="details">${esc(it.details)}</div>`:""}<div class="meta">${esc(short(it.date))} • <span class="chip">${esc(SOURCES[it.src]||it.src)}</span></div></div>
       <div class="amt num ${it.flow>0?"in":""}">${it.flow>0?"+"+money(it.flow):money(-it.flow)}</div></div>
       ${fundSeg(it)}
       <div class="row" style="justify-content:space-between"><span class="small muted">${esc(where)}</span>
@@ -819,7 +824,14 @@ function viewReview(){
     </article>`;
   }).join("");
   const dupHtml = dups.length ? `<details class="dups"><summary>${dups.length} hidden as duplicates</summary>${dups.map(it => `<article class="rv"><div class="top"><div class="mid"><div class="desc">${esc(it.desc)}</div><div class="meta">${esc(short(it.date))} • <span class="chip">${esc(SOURCES[it.src]||it.src)}</span></div></div><div class="amt num">${money(Math.abs(it.flow))}</div></div><div class="note">${esc(it.dupNote||"Matches another charge")}</div><div class="acts" style="margin-top:10px"><button class="btn ghost sm" data-act="dismiss-dup" data-id="${esc(it.id)}">It’s a duplicate</button><button class="btn sm" data-act="undup" data-id="${esc(it.id)}">Not a duplicate</button></div></article>`).join("")}</details>` : "";
-  return head + (items.length ? `<div class="bulk"><span class="muted">${items.length} to review. The pre-selected choice is my best guess, and it learns from what you pick.</span><span class="row" style="gap:8px"><button class="btn yellow" data-act="confirm-all">Confirm all ${items.length}</button><button class="btn danger" data-act="deny-all">Deny all ${items.length}</button></span></div>` : `<p class="muted">Nothing left to review.</p>`) + body + dupHtml;
+  if (S.rsel) for (const id of [...S.rsel]) if (!items.some(i => i.id === id)) S.rsel.delete(id);
+  const n = S.rsel ? S.rsel.size : 0;
+  const setOpts = [["","Set selected to…"],["personal","Personal"],["gas","Gas"],["debt","Debt"],["savings","Moved to savings"],["income","Extra income"],["refund","Refund"],["skip","Skip"]].map(([k,l]) => `<option value="${k}">${l}</option>`).join("");
+  const bar = !items.length ? `<p class="muted">Nothing left to review.</p>` : S.rsel ? `<div class="selbar">
+      <div class="row" style="justify-content:space-between;margin-bottom:8px"><b>${n} selected</b><span class="row"><button class="btn ghost sm" data-act="rsel-all">${n === items.length ? "Clear" : "Select all " + items.length}</button><button class="btn ghost sm" data-act="rsel-done">Done</button></span></div>
+      <div class="row"><select class="input" data-act="rsel-set" style="width:auto;min-height:38px;padding:6px 10px" ${n ? "" : "disabled"} aria-label="Set where the selected charges go">${setOpts}</select><button class="btn sm" data-act="rsel-confirm" ${n ? "" : "disabled"}>Confirm ${n || ""}</button><button class="btn danger sm" data-act="rsel-deny" ${n ? "" : "disabled"}>Deny ${n || ""}</button></div>
+    </div>` : `<div class="bulk"><span class="muted">${items.length} to review. The pre-selected choice is my best guess, and it learns from what you pick.</span><span class="row" style="gap:8px"><button class="btn ghost" data-act="rsel-start">Select</button><button class="btn yellow" data-act="confirm-all">Confirm all ${items.length}</button><button class="btn danger" data-act="deny-all">Deny all ${items.length}</button></span></div>`;
+  return head + bar + body + dupHtml;
 }
 
 /* ---------- import ---------- */
@@ -1868,6 +1880,7 @@ document.addEventListener("click", async e => {
   const tab = e.target.closest("[data-tab]");
   if (tab){ closeSheet(); go(tab.dataset.tab); return; }
   if (e.target.id === "scrim"){ closeSheet(); return; }
+  if (S.rsel && S.view === "review"){ const art = e.target.closest("article.rv"); if (art && !e.target.closest("button,input,select,a,label")){ const cb = art.querySelector("[data-rsel]"); if (cb){ cb.checked = !cb.checked; cb.dispatchEvent(new Event("change", {bubbles:true})); return; } } }
   const pd = e.target.closest("[data-pickd]");
   if (pd){ pd.parentElement.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b === pd)); return; }
   const sh = e.target.closest("[data-share]");
@@ -1939,6 +1952,19 @@ document.addEventListener("click", async e => {
   else if (a === "confirm") confirmItems([id]);
   else if (a === "confirm-all") confirmItems(pending().map(i => i.id));
   else if (a === "deny") denyItem(id);
+  else if (a === "rsel-start"){ S.rsel = new Set(); render(); }
+  else if (a === "rsel-done"){ S.rsel = null; render(); }
+  else if (a === "rsel-all"){ const ids = pending().map(i => i.id); S.rsel = S.rsel && S.rsel.size === ids.length ? new Set() : new Set(ids); render(); }
+  else if (a === "rsel-period"){ const ids = pending().filter(i => periodFor(i.date) === el.dataset.p).map(i => i.id); const all = ids.every(x => S.rsel.has(x)); ids.forEach(x => all ? S.rsel.delete(x) : S.rsel.add(x)); render(); }
+  else if (a === "rsel-confirm"){ const ids = [...(S.rsel || [])]; if (!ids.length) return; S.rsel = null; confirmItems(ids); }
+  else if (a === "rsel-deny"){
+    const n = S.rsel ? S.rsel.size : 0; if (!n) return;
+    openSheet(`<h2>Deny ${n} charge${n===1?"":"s"}?</h2><p class="muted">They won’t be added, and they won’t come back if you import or pull them again.</p><div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Cancel</button><button class="btn danger" data-act="rsel-deny-ok">Deny ${n}</button></div>`);
+  }
+  else if (a === "rsel-deny-ok"){
+    const ids = new Set(S.rsel || []); S.inbox.items = S.inbox.items.filter(i => !ids.has(i.id)); S.rsel = null;
+    closeSheet(); render(); await saveInbox(); toast(`${ids.size} denied.`);
+  }
   else if (a === "deny-all"){
     const n = pending().length; if (!n) return;
     openSheet(`<h2>Deny all ${n} charge${n===1?"":"s"}?</h2><p class="muted">None of them will be added, and they won’t come back if you import the same file again.</p><div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Cancel</button><button class="btn danger" data-act="deny-all-confirm">Deny all ${n}</button></div>`);
@@ -2062,6 +2088,19 @@ document.addEventListener("click", async e => {
 });
 document.addEventListener("input", e => { if (e.target.id === "gh-repo" || e.target.id === "gh-token") ghRead(); if (e.target.id === "q"){ S.q = e.target.value; $("#qres").innerHTML = searchResults(); } });
 document.addEventListener("change", e => {
+  if (e.target.dataset && e.target.dataset.rsel !== undefined && S.rsel){ const id = e.target.dataset.rsel; e.target.checked ? S.rsel.add(id) : S.rsel.delete(id); render(); return; }
+  if (e.target.dataset && e.target.dataset.act === "rsel-set" && S.rsel){
+    const want = e.target.value; if (!want) return;
+    let changed = 0, skipped = 0;
+    for (const it of S.inbox.items) if (S.rsel.has(it.id)){
+      const out = it.flow < 0, f = want === "refund" ? "personal" : want;
+      const ok = want === "skip" || (out ? ["personal","gas","debt","savings"].includes(want) : ["income","refund"].includes(want));
+      if (ok){ it.fund = f; changed++; } else skipped++;
+    }
+    render(); saveInbox();
+    toast(`${changed} set to ${e.target.selectedOptions[0].text}.` + (skipped ? ` ${skipped} skipped because ${skipped === 1 ? "it’s" : "they’re"} ${want === "income" || want === "refund" ? "a charge, not money in" : "money in, not a charge"}.` : ""));
+    return;
+  }
   if (e.target.id === "amzIn" && e.target.files.length){ amzImport(e.target.files[0]); e.target.value = ""; return; }
   if (e.target.dataset && e.target.dataset.label){ saveLabel(e.target.dataset.label, e.target.value); return; }
   if (e.target.id === "plaid-url"){ S.settings = {...S.settings, plaidUrl: e.target.value.trim(), kind:"settings"}; store.save("settings", S.settings); PL.items = null; PL.err = ""; render(); plaidAutoLoad(); return; }
