@@ -184,6 +184,9 @@ textarea.input{min-height:120px;font-family:ui-monospace,Menlo,Consolas,monospac
 .selbar .row{gap:8px}
 .rv.picked{border-color:var(--ink);box-shadow:0 0 0 1.5px var(--ink) inset}
 .rck{width:24px;height:24px;flex:none;margin:2px 4px 0 0;accent-color:var(--ink);cursor:pointer}
+.rv.kfocus{outline:3px solid var(--focus);outline-offset:2px}
+.kbd-hint{display:none}
+@media (min-width:900px){.kbd-hint{display:block}}
 .rv .note{font-size:13px;background:var(--sunk);border-radius:8px;padding:6px 10px;margin-top:10px}
 .chip{display:inline-block;font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--sunk);color:var(--ink)}
 .bulk{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:10px 0 16px}
@@ -486,11 +489,12 @@ function render(){
   if (!S.ready) return;
   const m = $("#main");
   if (S.view === "home") m.innerHTML = viewHome();
-  else if (S.view === "review") m.innerHTML = viewReview();
+  else if (S.view === "review"){ m.innerHTML = viewReview(); applyRFocus(false); }
   else if (S.view === "import") m.innerHTML = viewImport();
   else if (S.view === "accounts") m.innerHTML = viewAccounts();
   else if (S.view === "trends") m.innerHTML = viewTrends();
   else if (S.view === "search") m.innerHTML = viewSearch();
+  else if (S.view === "rules") m.innerHTML = viewRules();
   else m.innerHTML = viewSettings();
 }
 function go(view){ S.sel = null; S.rsel = null; S.view = view; render(); window.scrollTo(0,0); if (view === "accounts") plaidAutoLoad(); }
@@ -847,14 +851,16 @@ function viewReview(){
   const items = pending().sort((a,b) => b.date.localeCompare(a.date));
   const dups = S.inbox.items.filter(i => i.status === "dup");
   const multi = new Set(items.map(i => periodFor(i.date))).size > 1, latestP = periodList().slice(-1)[0];
-  const head = `<div class="topbar"><h1>Review</h1></div>`;
-  if (!items.length && !dups.length) return head + `<div class="list"><div class="empty"><h3>All caught up</h3>Import a statement and new charges will show up here for you to confirm.<div style="margin-top:14px"><button class="btn" data-tab="import">Import a statement</button></div></div></div>`;
+  const head = `<div class="topbar"><h1>Review</h1></div>${items.length ? `<p class="small muted kbd-hint" style="margin:-8px 0 12px">Keyboard: ↑ ↓ move, C confirm, D deny, E edit, U undo. Pick a fund: P Personal, G Gas, B Debt, S Savings, I Extra income, F Refund, Y Paycheck, X Skip. Space selects in Select mode.</p>` : ""}`;
+  const den = deniedNow().sort((a,b) => b.date.localeCompare(a.date));
+  const deniedHtml = den.length ? `<details class="dups"><summary>Denied this paycheck (${den.length})</summary>${den.map(it => `<article class="rv"><div class="top"><div class="mid"><div class="desc">${esc(it.desc)}</div><div class="meta">${esc(short(it.date))} • <span class="chip">${esc(SOURCES[it.src]||it.src)}</span></div></div><div class="amt num ${it.flow>0?"in":""}">${it.flow>0?"+"+money(it.flow):money(-it.flow)}</div></div><div class="acts" style="margin-top:10px"><button class="btn sm" data-act="restore-denied" data-id="${esc(it.id)}">Restore to Review</button></div></article>`).join("")}</details>` : "";
+  if (!items.length && !dups.length) return head + deniedHtml + `<div class="list"><div class="empty"><h3>All caught up</h3>Import a statement and new charges will show up here for you to confirm.<div style="margin-top:14px"><button class="btn" data-tab="import">Import a statement</button></div></div></div>` + deniedHtml;
   const body = items.map((it, ix) => {
     const pIn = periodFor(it.date);
     const hdr = multi && (ix === 0 || periodFor(items[ix-1].date) !== pIn) ? `<h3 style="margin:${ix?22:4}px 0 8px">${pIn === latestP ? "This paycheck" : "Past paycheck"}: ${esc(short(pIn))} to ${esc(short(minIso(periodEnd(pIn), todayIso())))} <span class="muted small">(${items.filter(x => periodFor(x.date) === pIn).length})</span>${S.rsel ? ` <button class="btn ghost sm" style="min-height:30px;padding:3px 10px;margin-left:6px" data-act="rsel-period" data-p="${esc(pIn)}">Select these</button>` : ""}</h3>` : "";
     const where = it.fund === "paycheck" ? `Starts a new paycheck on ${short(it.date)}` : it.fund === "skip" ? "Won’t be counted" : pIn ? `Goes in the ${short(pIn)} paycheck` : "";
     const picked = S.rsel && S.rsel.has(it.id);
-    return hdr + `<article class="rv ${picked ? "picked" : ""}">
+    return hdr + `<article class="rv ${picked ? "picked" : ""}" data-rid="${esc(it.id)}">
       <div class="top">${S.rsel ? `<input type="checkbox" class="rck" data-rsel="${esc(it.id)}" ${picked ? "checked" : ""} aria-label="Select ${esc(it.desc)}">` : ""}<div class="mid"><button class="desc linkish" data-act="edit-item" data-id="${esc(it.id)}" aria-label="Rename or add details">${esc(it.desc)}<span class="pen" aria-hidden="true">✎</span></button>${it.details?`<div class="details">${esc(it.details)}</div>`:""}<div class="meta">${esc(short(it.date))} • <span class="chip">${esc(SOURCES[it.src]||it.src)}</span></div></div>
       <div class="amt num ${it.flow>0?"in":""}">${it.flow>0?"+"+money(it.flow):money(-it.flow)}</div></div>
       ${fundSeg(it)}
@@ -871,7 +877,7 @@ function viewReview(){
       <div class="row" style="justify-content:space-between;margin-bottom:8px"><b>${n} selected</b><span class="row"><button class="btn ghost sm" data-act="rsel-all">${n === items.length ? "Clear" : "Select all " + items.length}</button><button class="btn ghost sm" data-act="rsel-done">Done</button></span></div>
       <div class="row"><select class="input" data-act="rsel-set" style="width:auto;min-height:38px;padding:6px 10px" ${n ? "" : "disabled"} aria-label="Set where the selected charges go">${setOpts}</select><button class="btn sm" data-act="rsel-confirm" ${n ? "" : "disabled"}>Confirm ${n || ""}</button><button class="btn danger sm" data-act="rsel-deny" ${n ? "" : "disabled"}>Deny ${n || ""}</button></div>
     </div>` : `<div class="bulk"><span class="muted">${items.length} to review. The pre-selected choice is my best guess, and it learns from what you pick.</span><span class="row" style="gap:8px"><button class="btn ghost" data-act="rsel-start">Select</button><button class="btn yellow" data-act="confirm-all">Confirm all ${items.length}</button><button class="btn danger" data-act="deny-all">Deny all ${items.length}</button></span></div>`;
-  return head + bar + body + dupHtml;
+  return head + bar + body + dupHtml + deniedHtml;
 }
 
 /* ---------- import ---------- */
@@ -1019,7 +1025,7 @@ function viewSettings(){
       <label class="btn ghost" style="display:inline-flex;align-items:center;cursor:pointer">Restore from backup<input type="file" id="restoreIn" accept="*/*" style="position:absolute;width:1px;height:1px;opacity:0"></label>
     </div>
     <p class="small muted" style="margin:12px 0 0">A backup is one file. Keep a copy in Google Drive or email it to yourself. To move your data to another phone or computer, back up here and restore it there.</p>
-    <div class="row" style="margin-top:12px"><button class="btn ghost" data-act="export">Export to spreadsheet (CSV)</button>${nRules?'<button class="btn ghost" data-act="clear-rules">Forget learned merchants</button>':""}</div>
+    <div class="row" style="margin-top:12px"><button class="btn ghost" data-act="open-rules">Your rules (${ruleCount()})</button><button class="btn ghost" data-act="xlsx-open">Export like my spreadsheet (.xlsx)</button><button class="btn ghost" data-act="export">Export to spreadsheet (CSV)</button>${nRules?'<button class="btn ghost" data-act="clear-rules">Forget learned merchants</button>':""}</div>
   </div>
   <div class="panel"><h2 style="margin-bottom:6px">Appearance</h2>
     <div class="seg">${[["auto","Match phone"],["light","Light"],["dark","Dark"]].map(([k,l]) => `<button data-act="theme" data-t="${k}" aria-pressed="${(document.documentElement.dataset.theme||"auto")===k}">${l}</button>`).join("")}</div>
@@ -1392,6 +1398,29 @@ function fundSheet(f){
       : `<div class="list" style="margin-top:8px"><div class="empty">Nothing in ${esc(names[f])} for this paycheck yet.</div></div>`}
     <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn ghost" data-act="close">Close</button></div>`);
 }
+/* ---------- rules: everything Payday was told to "always" do ---------- */
+function ruleCount(){ const r = S.rules; return Object.keys(r.map || {}).length + Object.keys(r.names || {}).length + Object.keys(r.split || {}).length + Object.keys(r.dir || {}).length + Object.keys(r.save || {}).length + Object.keys(S.settings.formats || {}).length; }
+function viewRules(){
+  const r = S.rules, sel = (t, k, val, opts) => `<select class="input" data-rule-t="${t}" data-rule-k="${esc(k)}" style="width:auto;min-height:38px;padding:6px 10px">${opts.map(([v,l]) => `<option value="${v}" ${v===val?"selected":""}>${l}</option>`).join("")}</select>`;
+  const del = (t, k) => `<button class="iconbtn" data-act="rule-del" data-t="${t}" data-k="${esc(k)}" aria-label="Delete this rule" style="width:36px;height:36px;flex:none">✕</button>`;
+  const row = (label, control, t, k) => `<div class="row" style="justify-content:space-between;flex-wrap:nowrap;padding:10px 14px;border-top:1px solid var(--line)"><span style="min-width:0;overflow-wrap:anywhere">“${esc(label)}”</span><span class="row" style="flex-wrap:nowrap;gap:8px">${control}${del(t, k)}</span></div>`;
+  const section = (title, help, rows) => `<h3 style="margin:22px 0 4px">${title} <span class="muted small">(${rows.length})</span></h3><p class="small muted" style="margin:0 0 8px">${help}</p>${rows.length ? `<div class="list" style="padding:0">${rows.join("")}</div>` : `<p class="small muted">None yet.</p>`}`;
+  const fundOpts = [["personal","Personal"],["gas","Gas"],["debt","Debt"],["income","Extra income"],["skip","Skip"]];
+  return `<div class="topbar"><h1 style="display:flex;align-items:center;gap:12px"><button class="iconbtn" data-tab="settings" aria-label="Back to Settings">${ICONS.left}</button>Your rules</h1></div>
+  <p class="muted" style="margin:0">Everything Payday does automatically because you told it to, or learned from what you picked. Changes apply to future imports and pulls.</p>
+  ${section("Renames", "Charges with this bank name get your name instead.", Object.entries(r.names || {}).map(([k, v]) => row(k, `<input class="input" data-rule-t="names" data-rule-k="${esc(k)}" value="${esc(v)}" style="width:min(220px,40vw);min-height:38px">`, "names", k)))}
+  ${section("Bill splits", "Only your share of these counts.", Object.entries(r.split || {}).map(([k, v]) => row(k, `<span class="row" style="gap:4px;flex-wrap:nowrap"><input class="input num" data-rule-t="split" data-rule-k="${esc(k)}" value="${Math.round(v*10000)/100}" inputmode="decimal" style="width:80px;min-height:38px">%</span>`, "split", k)))}
+  ${section("Direction fixes", "Always treated as a charge or as money in, whatever the bank says.", Object.entries(r.dir || {}).map(([k, v]) => row(k, sel("dir", k, v, [["out","Charge"],["in","Money in"]]), "dir", k)))}
+  ${section("Savings transfers", "Pre-set to Moved to savings. Payments to your PayPal name are always included.", Object.keys(r.save || {}).map(k => row(k, "", "save", k)))}
+  ${section("Learned categories", "What gets pre-selected in Review, learned from what you confirmed.", Object.entries(r.map || {}).sort((a,b) => a[0].localeCompare(b[0])).map(([k, v]) => row(k, sel("map", k, v, fundOpts), "map", k)))}
+  ${section("Statement file types", "Files with this layout are labeled as this account.", Object.entries(S.settings.formats || {}).map(([k, v]) => row("File layout " + k, sel("formats", k, v, Object.entries(SOURCES).filter(([x]) => !["manual","sheet"].includes(x))), "formats", k)))}`;
+}
+function ruleSet(t, k, v){
+  if (t === "formats"){ S.settings.formats = S.settings.formats || {}; if (v === null) delete S.settings.formats[k]; else S.settings.formats[k] = v; store.save("settings", S.settings); return; }
+  S.rules[t] = S.rules[t] || {};
+  if (v === null) delete S.rules[t][k]; else S.rules[t][k] = v;
+  store.save("rules", S.rules);
+}
 /* ---------- savings goals ---------- */
 // Your savings fill your goals in order: the first goal fills up, then the next one starts.
 function goalsList(){ return (S.settings.goals || []).filter(g => g && g.name && +g.target > 0); }
@@ -1478,9 +1507,10 @@ async function confirmItems(ids){
   const items = S.inbox.items.filter(i => ids.includes(i.id) && i.status === "pending" && !busyIds.has(i.id));
   if (!items.length) return;
   items.forEach(i => busyIds.add(i.id));
-  try{ await confirmItemsRun(items); } finally { items.forEach(i => busyIds.delete(i.id)); }
+  const snap = snapUndo();
+  try{ await confirmItemsRun(items, snap); } finally { items.forEach(i => busyIds.delete(i.id)); }
 }
-async function confirmItemsRun(items){
+async function confirmItemsRun(items, snap){
   const touched = new Set(); let made = 0, skipped = 0, pays = 0;
   // check everything can land BEFORE changing anything, so a failure can't leave half the batch added
   const newPayDates = items.filter(i => i.fund === "paycheck").map(i => i.date);
@@ -1505,11 +1535,44 @@ async function confirmItemsRun(items){
   const saves = [saveInbox(), ...[...touched].map(savePeriod)];
   saveRules();
   await Promise.all(saves);
-  toast([made && `${made} added`, pays && `${pays} paycheck${pays>1?"s":""} started`, skipped && `${skipped} skipped`].filter(Boolean).join(", ") + ".");
+  toastUndo([made && `${made} added`, pays && `${pays} paycheck${pays>1?"s":""} started`, skipped && `${skipped} skipped`].filter(Boolean).join(", ") + ".", snap);
 }
-function denyItem(id){
-  S.inbox.items = S.inbox.items.filter(i => i.id !== id);
-  render(); saveInbox(); toast("Denied. It won’t come back if you import the same file again.");
+let UNDO = null, undoT;
+function snapUndo(){ return {inbox: clone(S.inbox), rules: clone(S.rules), periods: clone(S.periods)}; }
+function toastUndo(msg, snap){
+  UNDO = snap; clearTimeout(toastT); clearTimeout(undoT);
+  $("#toastRoot").innerHTML = `<div class="toast" role="status" style="display:flex;align-items:center;gap:14px">${esc(msg)}<button class="btn sm" data-act="undo" style="background:var(--personal);color:var(--on-personal);min-height:34px">Undo</button></div>`;
+  undoT = setTimeout(() => { UNDO = null; $("#toastRoot").innerHTML = ""; }, 8000);
+}
+async function doUndo(){
+  const u = UNDO; UNDO = null; clearTimeout(undoT); $("#toastRoot").innerHTML = ""; if (!u) return;
+  const saves = [];
+  for (const p of Object.keys(S.periods)) if (!u.periods[p]){ delete S.periods[p]; saves.push(store.remove("p-" + p)); }
+  for (const [p, body] of Object.entries(u.periods)) if (JSON.stringify(body) !== JSON.stringify(S.periods[p])){ S.periods[p] = body; saves.push(savePeriod(p)); }
+  S.inbox = u.inbox; saves.push(saveInbox());
+  if (JSON.stringify(u.rules) !== JSON.stringify(S.rules)){ S.rules = u.rules; saves.push(store.save("rules", S.rules)); }
+  S.pIdx = null; render(); await Promise.all(saves); toast("Undone.");
+}
+// Denied charges from the current paycheck are kept so they can be restored.
+function deniedNow(){
+  const latest = periodList().slice(-1)[0];
+  return (S.inbox.denied || []).filter(d => latest && d.date >= latest);
+}
+function denyIds(ids, msg){
+  const set = new Set(ids); if (!set.size) return;
+  const snap = snapUndo(), latest = periodList().slice(-1)[0];
+  const gone = S.inbox.items.filter(i => set.has(i.id));
+  S.inbox.items = S.inbox.items.filter(i => !set.has(i.id));
+  S.inbox.denied = [...deniedNow(), ...gone.filter(i => latest && i.date >= latest).map(i => ({...i, deniedAt: Date.now()}))].slice(-300);
+  if (S.rsel) gone.forEach(i => S.rsel.delete(i.id));
+  render(); saveInbox(); toastUndo(msg || (gone.length === 1 ? "Denied." : `${gone.length} denied.`), snap);
+}
+function denyItem(id){ denyIds([id], "Denied."); }
+function restoreDenied(id){
+  const d = (S.inbox.denied || []).find(x => x.id === id); if (!d) return;
+  S.inbox.denied = S.inbox.denied.filter(x => x.id !== id);
+  const it = {...d, status: "pending"}; delete it.deniedAt;
+  S.inbox.items.push(it); render(); saveInbox(); toast("Back in Review.");
 }
 
 /* ---------- import parsing ---------- */
@@ -1759,6 +1822,99 @@ function saveFile(name, text, type){
   a.href = URL.createObjectURL(new Blob([text], {type}));
   a.download = name; document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+}
+function saveBlob(name, blob){
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+}
+function xlsxSheet(){
+  const list = periodList(), cur = list[S.pIdx === null || S.pIdx >= list.length ? list.length - 1 : S.pIdx];
+  openSheet(`<h2>Export like my spreadsheet</h2>
+    <p class="muted" style="margin:-6px 0 14px">An Excel file laid out like your old paycheck sheet: Personal, Gas, Debt, Extra income and Savings, with the same colors. Opens in Google Sheets too.</p>
+    <div class="row"><button class="btn" data-act="xlsx-go" data-which="one">The ${esc(short(cur))} paycheck</button><button class="btn ghost" data-act="xlsx-go" data-which="all">All ${list.length} paychecks, one tab each</button></div>`);
+}
+const XML = v => String(v).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
+// Builds a real .xlsx (with colors) using the zip library Payday already has.
+async function buildXlsx(sheets){
+  const FILLS = {none:0, yellow:2, green:3, orange:4, black:5, red:6, blue:7, gray:8};
+  const fillXml = ['<fill><patternFill patternType="none"/></fill>','<fill><patternFill patternType="gray125"/></fill>',
+    ...["FFFFFF00","FF00FF00","FFFF9900","FF000000","FFFF6B6B","FF6FA8DC","FFE7E6E6"].map(c => `<fill><patternFill patternType="solid"><fgColor rgb="${c}"/><bgColor indexed="64"/></patternFill></fill>`)];
+  const xfs = [], xfKey = {};
+  const style = o => { const k = JSON.stringify(o); if (xfKey[k] === undefined){ xfKey[k] = xfs.length; xfs.push(o); } return xfKey[k]; };
+  style({});
+  const col = n => { let s = ""; n++; while (n){ const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; };
+  const sheetXml = sh => {
+    const rows = sh.rows.map((r, ri) => `<row r="${ri+1}">${r.map((c, ci) => {
+      if (c === null || c === undefined || c === "") return "";
+      const cell = typeof c === "object" ? c : {v: c};
+      const st = style({font: cell.bold ? (cell.fill === "black" ? 2 : 1) : (cell.fill === "black" ? 2 : 0), fill: FILLS[cell.fill || "none"], money: typeof cell.v === "number"});
+      const ref = col(ci) + (ri+1);
+      if (cell.v === undefined || cell.v === "") return `<c r="${ref}" s="${st}"/>`;
+      return typeof cell.v === "number" ? `<c r="${ref}" s="${st}"><v>${cell.v}</v></c>` : `<c r="${ref}" s="${st}" t="inlineStr"><is><t xml:space="preserve">${XML(cell.v)}</t></is></c>`;
+    }).join("")}</row>`).join("");
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols>${sh.cols.map((w, i) => `<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join("")}</cols><sheetData>${rows}</sheetData></worksheet>`;
+  };
+  const sheetFiles = sheets.map(sheetXml);
+  const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="&quot;$&quot;#,##0.00"/></numFmts><fonts count="3"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts><fills count="${fillXml.length}">${fillXml.join("")}</fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${xfs.length}">${xfs.map(o => `<xf numFmtId="${o.money ? 164 : 0}" fontId="${o.font || 0}" fillId="${o.fill || 0}" borderId="0" xfId="0"${o.money ? ' applyNumberFormat="1"' : ""}${o.font ? ' applyFont="1"' : ""}${o.fill ? ' applyFill="1"' : ""}/>`).join("")}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i+1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}</Types>`);
+  zip.file("_rels/.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`);
+  zip.file("xl/workbook.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets.map((sh, i) => `<sheet name="${XML(sh.name)}" sheetId="${i+1}" r:id="rId${i+1}"/>`).join("")}</sheets></workbook>`);
+  zip.file("xl/_rels/workbook.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i+1}.xml"/>`).join("")}<Relationship Id="rId${sheets.length+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`);
+  sheetFiles.forEach((x, i) => zip.file(`xl/worksheets/sheet${i+1}.xml`, x));
+  zip.file("xl/styles.xml", stylesXml);
+  return zip.generateAsync({type: "blob", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+}
+// One paycheck laid out like the old Google Sheet tab.
+function paycheckSheet(p){
+  const per = S.periods[p], c = calc(p), st = S.settings, tx = (per.txns || []).slice().sort((a,b) => a.date.localeCompare(b.date));
+  const d = toD(p), name = `${d.getMonth()+1}${d.getDate()}${String(d.getFullYear()).slice(2)}`;
+  const mdy = x => { const t = toD(x); return `${t.getMonth()+1}/${t.getDate()}/${t.getFullYear()}`; };
+  const pc = v => `${Math.round(v * 10000) / 100}%`;
+  const rows = [], blank = () => rows.push([]);
+  const head = (title, fill) => rows.push([{v: title, bold: true, fill}, {v: "Date", bold: true, fill: "black"}, {v: "Where it was charged (and details)", bold: true, fill: "black"}, {v: "Amount", bold: true, fill: "black"}]);
+  const items = (f, colors) => { const list = tx.filter(t => t.fund === f); if (!list.length) rows.push(["", {v: "", fill: colors[0]}, "(none)", {v: "", fill: colors[1]}]); list.forEach(t => rows.push(["", {v: mdy(t.date), fill: colors[0]}, t.desc + (t.details ? ` (${t.details})` : ""), {v: r2(+t.amount), fill: colors[1]}])); };
+  const line = (label, v, bold, fill) => rows.push([{v: label, bold, fill}, "", "", {v: r2(v), bold, fill}]);
+  rows.push([{v: "PAYCHECK", bold: true, fill: "black"}, {v: mdy(p), bold: true}, {v: "PAYCHECK TOTAL", bold: true, fill: "black"}, {v: r2(c.pay), bold: true, fill: "green"}]);
+  rows.push(["", "", `${mdy(p)} to ${mdy(periodEnd(p))}`]);
+  blank();
+  head("PERSONAL", "yellow"); items("personal", ["yellow", "green"]);
+  line(`Personal (${pc(st.personalPct)} of paycheck${c.extra ? " + extra income share" : ""})`, c.personalBudget);
+  if (c.rolledIn) line("Left over from last paycheck", c.rolledIn);
+  if (c.owedIn) line("Overspending carried in", -c.owedIn);
+  line("Spent", -c.personalSpent);
+  line("PERSONAL FUND REMAINING", c.personalLeft, true, "orange");
+  blank();
+  head("GAS", "orange"); items("gas", ["yellow", "green"]);
+  line("Gas fund", c.gasBudget); line("REMAINING GAS FUND", c.gasLeft, true, "orange");
+  blank();
+  head("DEBT", "red"); items("debt", ["yellow", "green"]);
+  line(`Debt (${pc(st.debtPct)} if needed)`, c.debtBudget); line("DEBT PAID", c.debtSpent, true, "orange");
+  blank();
+  head("EXTRA INCOME", "blue"); items("income", ["yellow", "green"]);
+  line("TOTAL", c.extra, true, "orange");
+  if (c.extra){ line(`To savings (${pc(st.extraSavingsPct)})`, c.savingsExtra); if (st.extraGasPct) line(`To gas (${pc(st.extraGasPct)})`, r2(c.extra * st.extraGasPct)); line("To personal", r2(c.extra * (1 - st.extraSavingsPct - (st.extraGasPct || 0)))); }
+  blank();
+  head("SAVINGS", "green");
+  line(`From paycheck (${pc(st.savingsPct)})`, c.savingsBase);
+  if (c.savingsExtra) line("From extra income", c.savingsExtra);
+  if (c.leftoverSave) line("Share of last paycheck’s leftover", c.leftoverSave);
+  line("Savings for this paycheck", c.savings, true, "green");
+  items("savings", ["yellow", "green"]);
+  const L = savingsLedger(p);
+  if (L){ if (L.before) line(L.before > 0 ? "Left to move from before" : "Ahead from before", L.before); line("Moved this paycheck", L.moved); line("STILL TO MOVE", Math.max(0, L.left), true, "orange"); }
+  return {name, rows, cols: [34, 12, 52, 14]};
+}
+async function exportXlsx(which){
+  if (!window.JSZip){ toast("The file builder didn’t load. Reload the app and try again."); return; }
+  const list = periodList(), cur = list[S.pIdx === null || S.pIdx >= list.length ? list.length - 1 : S.pIdx];
+  const ps = which === "all" ? list.slice().reverse() : [cur];
+  const used = {}, sheets = ps.map(p => { const sh = paycheckSheet(p); let n = sh.name, i = 2; while (used[n]) n = sh.name + "-" + i++; used[n] = 1; sh.name = n; return sh; });
+  try{
+    const blob = await buildXlsx(sheets);
+    saveBlob(which === "all" ? `Payday paychecks ${todayIso()}.xlsx` : `Payday ${sheets[0].name}.xlsx`, blob);
+    closeSheet(); toast("Saved to your Downloads.");
+  }catch(e){ toast("Couldn’t build the file. Try again."); }
 }
 function lastBackup(){ try{ return localStorage.getItem("payday-last-backup"); }catch(e){ return null; } }
 function backupData(){
@@ -2085,6 +2241,8 @@ document.addEventListener("click", async e => {
   else if (a === "confirm") confirmItems([id]);
   else if (a === "confirm-all") confirmItems(pending().map(i => i.id));
   else if (a === "deny") denyItem(id);
+  else if (a === "undo") doUndo();
+  else if (a === "restore-denied") restoreDenied(id);
   else if (a === "rsel-start"){ S.rsel = new Set(); render(); }
   else if (a === "rsel-done"){ S.rsel = null; render(); }
   else if (a === "rsel-all"){ const ids = pending().map(i => i.id); S.rsel = S.rsel && S.rsel.size === ids.length ? new Set() : new Set(ids); render(); }
@@ -2095,17 +2253,14 @@ document.addEventListener("click", async e => {
     openSheet(`<h2>Deny ${n} charge${n===1?"":"s"}?</h2><p class="muted">They won’t be added, and they won’t come back if you import or pull them again.</p><div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Cancel</button><button class="btn danger" data-act="rsel-deny-ok">Deny ${n}</button></div>`);
   }
   else if (a === "rsel-deny-ok"){
-    const ids = new Set(S.rsel || []); S.inbox.items = S.inbox.items.filter(i => !ids.has(i.id)); S.rsel = null;
-    closeSheet(); render(); await saveInbox(); toast(`${ids.size} denied.`);
+    const ids = [...(S.rsel || [])]; S.rsel = null; closeSheet(); denyIds(ids);
   }
   else if (a === "deny-all"){
     const n = pending().length; if (!n) return;
     openSheet(`<h2>Deny all ${n} charge${n===1?"":"s"}?</h2><p class="muted">None of them will be added, and they won’t come back if you import the same file again.</p><div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Cancel</button><button class="btn danger" data-act="deny-all-confirm">Deny all ${n}</button></div>`);
   }
   else if (a === "deny-all-confirm"){
-    const ids = new Set(pending().map(i => i.id));
-    S.inbox.items = S.inbox.items.filter(i => !ids.has(i.id));
-    closeSheet(); render(); await saveInbox(); toast(`${ids.size} denied.`);
+    closeSheet(); denyIds(pending().map(i => i.id));
   }
   else if (a === "undup"){ const it = S.inbox.items.find(i => i.id === id); if (it){ it.status = "pending"; delete it.dupNote; render(); saveInbox(); } }
   else if (a === "dismiss-dup"){ S.inbox.items = S.inbox.items.filter(i => i.id !== id); render(); saveInbox(); }
@@ -2116,6 +2271,10 @@ document.addEventListener("click", async e => {
   else if (a === "range"){ S.range = el.dataset.r; render(); }
   else if (a === "save-moved") movedSheet();
   else if (a === "goals-edit") goalsSheet();
+  else if (a === "open-rules") go("rules");
+  else if (a === "rule-del"){ ruleSet(el.dataset.t, el.dataset.k, null); render(); toast("Rule deleted."); }
+  else if (a === "xlsx-open") xlsxSheet();
+  else if (a === "xlsx-go") exportXlsx(el.dataset.which);
   else if (a === "goals-save"){
     const goals = [...document.querySelectorAll("#g-rows .goal-row")].map(r => ({id: r.dataset.gid, name: r.querySelector('[data-g=name]').value.trim(), target: r2(Math.abs(parseAmt(r.querySelector('[data-g=target]').value)))})).filter(g => g.name || g.target);
     if (goals.some(g => !g.name || !(g.target > 0))){ toast("Give each goal a name and a target amount."); return; }
@@ -2233,6 +2392,12 @@ document.addEventListener("click", async e => {
 });
 document.addEventListener("input", e => { if (e.target.id === "gh-repo" || e.target.id === "gh-token") ghRead(); if (e.target.id === "q"){ S.q = e.target.value; $("#qres").innerHTML = searchResults(); } });
 document.addEventListener("change", e => {
+  if (e.target.dataset && e.target.dataset.ruleT){
+    const t = e.target.dataset.ruleT, k = e.target.dataset.ruleK; let v = e.target.value;
+    if (t === "split"){ const n = parseFloat(v); if (!(n > 0 && n <= 100)){ toast("Use a percent from 1 to 100."); return; } v = Math.round(n * 100) / 10000; }
+    if (t === "names" && !v.trim()){ toast("A rename can’t be empty. Use ✕ to delete it."); return; }
+    ruleSet(t, k, typeof v === "string" ? v.trim() : v); toast("Rule updated."); return;
+  }
   if (e.target.dataset && e.target.dataset.rsel !== undefined && S.rsel){ const id = e.target.dataset.rsel; e.target.checked ? S.rsel.add(id) : S.rsel.delete(id); render(); return; }
   if (e.target.dataset && e.target.dataset.act === "rsel-set" && S.rsel){
     const want = e.target.value; if (!want) return;
@@ -2261,7 +2426,40 @@ document.addEventListener("change", e => {
 document.addEventListener("dragover", e => { const d = e.target.closest && e.target.closest("#drop"); if (d){ e.preventDefault(); d.classList.add("over"); } });
 document.addEventListener("dragleave", e => { const d = e.target.closest && e.target.closest("#drop"); if (d) d.classList.remove("over"); });
 document.addEventListener("drop", e => { const d = e.target.closest && e.target.closest("#drop"); if (d){ e.preventDefault(); d.classList.remove("over"); if (e.dataTransfer.files.length) handleFiles([...e.dataTransfer.files]); } });
+function reviewCards(){ return [...document.querySelectorAll("#main article.rv[data-rid]")]; }
+function applyRFocus(scroll){
+  const cards = reviewCards(); if (!cards.length){ S.rfoc = 0; return; }
+  S.rfoc = Math.max(0, Math.min(S.rfoc || 0, cards.length - 1));
+  cards.forEach((c, i) => c.classList.toggle("kfocus", i === S.rfoc && !!S.kbd));
+  if (scroll && S.kbd) cards[S.rfoc].scrollIntoView({block: "nearest", behavior: "smooth"});
+}
+function reviewKey(e){
+  if (S.view !== "review" || $("#sheetRoot").innerHTML || e.ctrlKey || e.metaKey || e.altKey) return false;
+  const tag = (document.activeElement && document.activeElement.tagName) || "";
+  if (/INPUT|TEXTAREA|SELECT/.test(tag)) return false;
+  const k = e.key.toLowerCase(), cards = reviewCards();
+  if ((k === "enter" || k === " ") && /^(BUTTON|A|SUMMARY)$/.test(tag)) return false;
+  if (k === "u" && UNDO){ doUndo(); return true; }
+  if (!cards.length) return false;
+  const move = d => { if (!S.kbd){ S.kbd = true; applyRFocus(true); return; } S.rfoc = (S.rfoc || 0) + d; applyRFocus(true); };
+  if (k === "arrowdown" || k === "j"){ move(1); return true; }
+  if (k === "arrowup" || k === "k"){ move(-1); return true; }
+  if (!S.kbd){ S.kbd = true; applyRFocus(true); }
+  const id = cards[Math.max(0, Math.min(S.rfoc || 0, cards.length - 1))].dataset.rid, it = S.inbox.items.find(i => i.id === id); if (!it) return false;
+  if (k === "c" || k === "enter"){ confirmItems([id]); return true; }
+  if (k === "d" || k === "delete"){ denyItem(id); return true; }
+  if (k === "e"){ itemSheet(it); return true; }
+  if (k === " " && S.rsel){ S.rsel.has(id) ? S.rsel.delete(id) : S.rsel.add(id); render(); return true; }
+  const map = {p:"personal", g:"gas", b:"debt", s:"savings", i:"income", f:"personal", y:"paycheck", x:"skip"}, f = map[k];
+  if (f){
+    const ok = it.flow < 0 ? ["personal","gas","debt","savings","skip"].includes(f) && k !== "f" : ["income","paycheck","personal","skip"].includes(f) && k !== "p";
+    if (!ok){ toast(it.flow < 0 ? "That option is for money coming in." : "That option is for charges. Use F for a refund."); return true; }
+    it.fund = f; render(); saveInbox(); return true;
+  }
+  return false;
+}
 document.addEventListener("keydown", e => {
+  if (reviewKey(e)){ e.preventDefault(); return; }
   if (e.key === "Enter" && e.target.dataset && e.target.dataset.label){ e.target.blur(); return; }
   if ((e.key === "Enter" || e.key === " ") && e.target.dataset && e.target.dataset.act === "fund-list"){ e.preventDefault(); e.target.click(); return; } if (e.key === "Escape") closeSheet(); });
 $("#fab").addEventListener("click", () => txSheet(null));
