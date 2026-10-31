@@ -397,7 +397,7 @@ function calc(p){
 // Review only deals with the current (latest) paycheck. A new paycheck deposit can still come through so the next one can be started.
 function curRange(){ const l = periodList(); if (!l.length) return null; const p = l[l.length-1]; return [p, periodEnd(p)]; }
 function inCur(it){ const r = curRange(); return !r || (it.date >= r[0] && it.date <= r[1]) || ((it.isPay || it.fund === "paycheck") && it.date >= r[0]); }
-function pending(){ return S.inbox.items.filter(i => i.status === "pending" && inCur(i)); }
+function pending(){ return S.inbox.items.filter(i => i.status === "pending"); }
 
 /* ---------- rendering ---------- */
 const ICONS = {
@@ -520,13 +520,15 @@ function fundSeg(it){
 }
 function viewReview(){
   const items = pending().sort((a,b) => b.date.localeCompare(a.date));
-  const dups = S.inbox.items.filter(i => i.status === "dup" && inCur(i));
+  const dups = S.inbox.items.filter(i => i.status === "dup");
+  const multi = new Set(items.map(i => periodFor(i.date))).size > 1, latestP = periodList().slice(-1)[0];
   const head = `<div class="topbar"><h1>Review</h1></div>`;
   if (!items.length && !dups.length) return head + `<div class="list"><div class="empty"><h3>All caught up</h3>Import a statement and new charges will show up here for you to confirm.<div style="margin-top:14px"><button class="btn" data-tab="import">Import a statement</button></div></div></div>`;
-  const body = items.map(it => {
+  const body = items.map((it, ix) => {
     const pIn = periodFor(it.date);
+    const hdr = multi && (ix === 0 || periodFor(items[ix-1].date) !== pIn) ? `<h3 style="margin:${ix?22:4}px 0 8px">${pIn === latestP ? "This paycheck" : "Past paycheck"}: ${esc(short(pIn))} to ${esc(short(minIso(periodEnd(pIn), todayIso())))} <span class="muted small">(${items.filter(x => periodFor(x.date) === pIn).length})</span></h3>` : "";
     const where = it.fund === "paycheck" ? `Starts a new paycheck on ${short(it.date)}` : it.fund === "skip" ? "Won’t be counted" : pIn ? `Goes in the ${short(pIn)} paycheck` : "";
-    return `<article class="rv">
+    return hdr + `<article class="rv">
       <div class="top"><div class="mid"><button class="desc linkish" data-act="edit-item" data-id="${esc(it.id)}" aria-label="Rename or add details">${esc(it.desc)}<span class="pen" aria-hidden="true">✎</span></button>${it.details?`<div class="details">${esc(it.details)}</div>`:""}<div class="meta">${esc(short(it.date))} • <span class="chip">${esc(SOURCES[it.src]||it.src)}</span></div></div>
       <div class="amt num ${it.flow>0?"in":""}">${it.flow>0?"+"+money(it.flow):money(-it.flow)}</div></div>
       ${fundSeg(it)}
