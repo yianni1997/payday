@@ -1628,7 +1628,8 @@ function isOwnReload(it){
   const last = String(S.settings.selfName || "").trim().split(/\s+/).slice(-1)[0];
   if (it.flow < 0 && /visa direct/i.test(t) && last && t.toLowerCase().includes(last.toLowerCase())) return true;
   if (it.flow < 0 && /paypal.*(add (to )?balance|add funds|add money)/i.test(t)) return true;
-  if (it.flow > 0 && it.src === "paypal" && /add(ed)? (funds|money)|money added|from (your )?(bank|debit card)|instant transfer from/i.test(t)) return true;
+  // The PayPal side of a reload: "Money Transfer from VISA Debit Card ••••6976", "Add money from bank". Not cashback.
+  if (it.flow > 0 && /add(ed)? (funds|money)|money added|instant transfer from|transfer from .*(debit|visa|bank|checking|chase|savings acc)/i.test(t) && !/cash ?back|reward/i.test(t)) return true;
   return false;
 }
 const CARD_BILL_RE = /paypal cashback mastercard|paypal cash back mastercard|paypal mastercard|paypal credit card|synchrony|syncb|chase card services|chase credit crd|payment to chase card|amazon (prime )?(store )?card|credit card (bill|payment)|card payment|epay/i;
