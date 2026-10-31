@@ -226,6 +226,8 @@ svg.chart text{fill:var(--muted);font-size:11px;font-family:var(--body)}
 /* sheet */
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:40;display:flex;align-items:flex-end;justify-content:center}
 .sheet{background:var(--bg);width:100%;max-width:520px;border-radius:22px 22px 0 0;padding:10px 18px calc(20px + env(safe-area-inset-bottom,0px));max-height:92vh;overflow:auto;animation:up .2s ease-out}
+.sheet-x{position:sticky;top:0;float:right;z-index:3;width:40px;height:40px;border-radius:20px;border:1px solid var(--line);background:var(--surface);color:var(--ink);display:grid;place-items:center;margin:0 -6px 6px 10px}
+.sheet-x svg{width:20px;height:20px}
 .sheet .grab{width:40px;height:5px;border-radius:3px;background:var(--line);margin:0 auto 12px}
 .sheet h2{margin-bottom:14px}
 @media (min-width:700px){.scrim{align-items:center}.sheet{border-radius:22px;padding-bottom:22px}.sheet .grab{display:none}}
@@ -1289,7 +1291,7 @@ function viewAccounts(){
 
 /* ---------- sheets ---------- */
 function openSheet(html){
-  $("#sheetRoot").innerHTML = `<div class="scrim" id="scrim"><div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>${html}</div></div>`;
+  $("#sheetRoot").innerHTML = `<div class="scrim" id="scrim"><div class="sheet" role="dialog" aria-modal="true"><button class="sheet-x" data-act="close" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button><div class="grab"></div>${html}</div></div>`;
   const f = $("#sheetRoot").querySelector("input:not([type=hidden])"); if (f) setTimeout(() => f.focus(), 60);
 }
 function closeSheet(){ $("#sheetRoot").innerHTML = ""; if (S.deferRender){ S.deferRender = false; render(); } }
@@ -1896,7 +1898,6 @@ function toast(msg){ clearTimeout(toastT); $("#toastRoot").innerHTML = `<div cla
 document.addEventListener("click", async e => {
   const tab = e.target.closest("[data-tab]");
   if (tab){ closeSheet(); go(tab.dataset.tab); return; }
-  if (e.target.id === "scrim"){ closeSheet(); return; }
   if (S.rsel && S.view === "review"){ const art = e.target.closest("article.rv"); if (art && !e.target.closest("button,input,select,a,label")){ const cb = art.querySelector("[data-rsel]"); if (cb){ cb.checked = !cb.checked; cb.dispatchEvent(new Event("change", {bubbles:true})); return; } } }
   const pd = e.target.closest("[data-pickd]");
   if (pd){ pd.parentElement.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b === pd)); return; }
