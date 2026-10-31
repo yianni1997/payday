@@ -281,7 +281,7 @@ const SOURCES = {
   paypal_mc:"PayPal Mastercard", paypal:"PayPal activity", chase_bank:"Chase checking",
   chase_amazon:"Chase Amazon card", other:"Other", manual:"Added by hand", sheet:"Spreadsheet"
 };
-const DEFAULTS = {personalPct:0.439848378655353, savingsPct:0.459357998970976, debtPct:0.05, gasBudget:60, extraSavingsPct:0.548, extraGasPct:0.004};
+const DEFAULTS = {personalPct:0.439848378655353, savingsPct:0.459357998970976, debtPct:0.05, gasBudget:60, extraSavingsPct:0.548, extraGasPct:0.004, selfName:"Yianni Pantaratos"};
 
 const CATS = [
   ["Gas", /\b(shell|exxon|mobil|sunoco|speedway|citgo|valero|sheetz|getty|lukoil|circle k|fuel)\b/i],
@@ -567,6 +567,9 @@ function fixWaitingDirections(){
   let n = 0;
   const bills = S.inbox.items.filter(it => it.status === "pending" && isCardPayment(it));
   if (bills.length){ S.inbox.items = S.inbox.items.filter(it => !bills.includes(it)); setTimeout(() => { saveInbox(); toast(`Left out ${bills.length} card bill payment${bills.length===1?"":"s"}. Those charges are already counted one by one.`); }, 0); }
+  let nSave = 0;
+  for (const it of S.inbox.items) if (it.status === "pending" && it.flow < 0 && it.fund !== "savings" && !it.saveChecked){ it.saveChecked = true; if (isSavingsMove(it)){ it.fund = "savings"; nSave++; } }
+  if (nSave) setTimeout(() => { saveInbox(); toast(`${nSave} payment${nSave===1?"":"s"} to yourself set to Moved to savings.`); }, 0);
   for (const it of S.inbox.items) if (it.status === "pending" && !it.dirChecked){
     it.dirChecked = true;
     if (it.bank === undefined) it.bank = it.flow;
@@ -713,6 +716,7 @@ function viewSettings(){
     <div class="grid2">
       <label class="field"><span>Extra income to savings %</span><input class="input num" id="s-extra" inputmode="decimal" value="${pct(st.extraSavingsPct)}"></label>
       <label class="field"><span>Extra income to gas %</span><input class="input num" id="s-extragas" inputmode="decimal" value="${pct(st.extraGasPct || 0)}"></label>
+      <label class="field" style="grid-column:1/-1"><span>Your name on PayPal</span><input class="input" id="s-selfname" value="${esc(st.selfName || "")}" placeholder="First Last"><small>Payments to this name (like sending to your savings PayPal) come in as Moved to savings.</small></label>
       <label class="field" style="grid-column:1/-1"><span>Track moving savings starting with</span><select class="input" id="s-savestart">${periodList().slice().reverse().map(p => `<option value="${p}" ${p===savingsStart()?"selected":""}>${short(p)} paycheck</option>`).join("")}</select><small>Savings you owe from this paycheck on must be marked as moved. Earlier paychecks are left alone.</small></label>
     </div>
     <p class="small muted" style="margin:-4px 0 14px">The rest of extra income (${pct(1 - st.extraSavingsPct - (st.extraGasPct || 0))}%) goes to Personal money.</p>
@@ -1097,12 +1101,22 @@ function movedSheet(){
 function findTx(id){ for (const p of periodList()){ const t = (S.periods[p].txns||[]).find(x => x.id === id); if (t) return {p, t}; } return null; }
 function savePeriod(p){ return store.save("p-" + p, S.periods[p]); }
 function saveInbox(){ if (S.inbox.seen.length > 4000) S.inbox.seen = S.inbox.seen.slice(-4000); return store.save("inbox", S.inbox); }
+function isSavingsMove(it){
+  const texts = [it.desc, it.orig].filter(Boolean), me = String(S.settings.selfName || "").trim().toLowerCase();
+  if (me && texts.some(t => /(payment|transfer|money sent|sent|send) to /i.test(t) && t.toLowerCase().includes(me))) return true;
+  if (texts.some(t => (S.rules.save || {})[savingsKey(t)])) return true;
+  return texts.some(t => /(to|into) .*savings|savings (deposit|transfer)|transfer to savings/i.test(t));
+}
+const savingsKey = d => normFull(String(d || "").replace(/\(via paypal\)/i, ""));
+const GENERIC_XFER = /paypal inst xfer|paypal transfer|^paypal\b|ppd id|web id/i;
 const normFull = d => String(d || "").toLowerCase().replace(/[^a-z0-9@. ]/g, " ").replace(/\s+/g, " ").trim();
 function learn(it){
   const full = normFull(it.orig || it.desc);
   S.rules.save = S.rules.save || {};
-  if (it.fund === "savings"){ if (!S.rules.save[full]){ S.rules.save[full] = true; S.rules._dirty = true; } return; }
-  if (S.rules.save[full]){ delete S.rules.save[full]; S.rules._dirty = true; }
+  // Remember the readable name (e.g. "Payment to …"), not Chase's generic PayPal text that every PayPal purchase shares.
+  const sk = [it.desc, it.orig].filter(t => t && !GENERIC_XFER.test(t)).map(savingsKey)[0];
+  if (it.fund === "savings"){ if (sk && !S.rules.save[sk]){ S.rules.save[sk] = true; S.rules._dirty = true; } return; }
+  if (sk && S.rules.save[sk]){ delete S.rules.save[sk]; S.rules._dirty = true; }
   const k = norm(it.orig || it.desc); if (!k || it.fund === "paycheck") return; if (S.rules.map[k] !== it.fund){ S.rules.map[k] = it.fund; S.rules._dirty = true; } }
 function saveRules(){ if (S.rules._dirty){ delete S.rules._dirty; store.save("rules", S.rules); } }
 function txFromItem(it){ const t = {id: uid(), date: it.date, desc: it.desc, fund: it.fund, amount: it.fund === "income" ? r2(it.flow) : r2(-it.flow), src: it.src}; if (it.details) t.details = it.details; return t; }
@@ -1335,7 +1349,7 @@ function addImport(r){
     if (hitI){
       used.add(hitI.id);
       const pp = hitI.src === "paypal" ? hitI : it, other = pp === it ? hitI : it;
-      if (/paypal|pp\*/i.test(other.desc) && !/paypal/i.test(pp.desc)) other.desc = `${pp.desc} (via PayPal)`;
+      if (/paypal|pp\*/i.test(other.desc) && !/paypal/i.test(pp.desc)){ other.desc = `${pp.desc} (via PayPal)`; if (other.flow < 0 && isSavingsMove(other)) other.fund = "savings"; }
       pp.status = "dup"; pp.dupNote = `Same charge as “${other.desc}” on ${SOURCES[other.src]||other.src}, ${short(other.date)}.`; dupCount++;
       if (pp === it){ L(raw, "dup", it.dupNote); S.inbox.items.push(it); continue; }
     }
@@ -1357,7 +1371,7 @@ function isCardPayment(it){
 }
 const CARD_BILL_RE = /paypal cashback mastercard|paypal cash back mastercard|paypal mastercard|paypal credit card|synchrony|syncb|chase card services|chase credit crd|payment to chase card|amazon (prime )?(store )?card|credit card (bill|payment)|card payment|epay/i;
 function suggest(it){
-  if (it.flow < 0 && ((S.rules.save || {})[normFull(it.orig || it.desc)] || /(to|into) .*savings|savings (deposit|transfer)|transfer to savings/i.test(it.orig || it.desc))) return "savings";
+  if (it.flow < 0 && isSavingsMove(it)) return "savings";
   const k = norm(it.orig || it.desc);
   if (k && S.rules.map[k]){ const f = S.rules.map[k]; if ((it.flow > 0) === ["income","paycheck"].includes(f) || f === "skip" || (f === "personal")) return f; }
   if (it.flow > 0 && PAYCHECK_RE.test(it.desc)) return "paycheck";
@@ -1735,7 +1749,7 @@ document.addEventListener("click", async e => {
     const vals = {personalPct: g("#s-personal")/100, savingsPct: g("#s-savings")/100, gasBudget: g("#s-gas"), debtPct: g("#s-debt")/100, extraSavingsPct: g("#s-extra")/100, extraGasPct: g("#s-extragas")/100};
     if (Object.values(vals).some(v => isNaN(v) || v < 0)){ toast("Use numbers only, like 43.98."); return; }
     if (vals.extraSavingsPct + vals.extraGasPct > 1){ toast("Extra income to savings and gas can’t add up to more than 100%."); return; }
-    S.settings = {...S.settings, ...vals, ...(ss ? {savingsStart: ss} : {}), kind:"settings"}; store.save("settings", S.settings); render(); toast("Split saved. Every paycheck uses it.");
+    S.settings = {...S.settings, ...vals, ...(ss ? {savingsStart: ss} : {}), selfName: ($("#s-selfname") ? $("#s-selfname").value.trim() : S.settings.selfName), kind:"settings"}; store.save("settings", S.settings); render(); toast("Split saved. Every paycheck uses it.");
   }
   else if (a === "export") exportCSV();
   else if (a === "edit-item"){ const it = S.inbox.items.find(i => i.id === id); if (it) itemSheet(it); }
