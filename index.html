@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&display=swap" rel="stylesheet">
 <script src="pdf.min.js"></script>
+<script src="jszip.min.js"></script>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -362,6 +363,7 @@ function applyDocs(docs){
   S.settings = {...DEFAULTS, ...(docs.settings || {})};
   S.inbox = docs.inbox ? {items:[], seen:[], ...clone(docs.inbox)} : {items:[], seen:[]};
   S.rules = docs.rules ? {map:{}, ...clone(docs.rules)} : {map:{}};
+  S.amazon = docs.amazon ? {ships:[], ...clone(docs.amazon)} : {ships:[]};
   for (const [id, body] of Object.entries(docs)) if (id.startsWith("p-") && body && body.date) periods[body.date] = clone(body);
   S.periods = periods;
 }
@@ -464,10 +466,176 @@ function render(){
   else if (S.view === "import") m.innerHTML = viewImport();
   else if (S.view === "accounts") m.innerHTML = viewAccounts();
   else if (S.view === "trends") m.innerHTML = viewTrends();
+  else if (S.view === "search") m.innerHTML = viewSearch();
   else m.innerHTML = viewSettings();
 }
 function go(view){ S.sel = null; S.view = view; render(); window.scrollTo(0,0); if (view === "accounts") plaidAutoLoad(); }
 
+
+/* ---------- Amazon orders: import your order history and link it to charges ---------- */
+function amzShips(){ return (S.amazon && S.amazon.ships) || []; }
+function amzOrders(){
+  const m = {};
+  for (const sh of amzShips()){ const o = m[sh.order] = m[sh.order] || {key: "o|" + sh.order, order: sh.order, date: sh.date, ship: sh.ship, total: 0, items: [], n: 0}; o.total = r2(o.total + sh.total); o.items.push(...sh.items); o.n++; if (sh.ship > o.ship) o.ship = sh.ship; }
+  return Object.values(m).filter(o => o.n > 1);
+}
+function amzFind(key){ return key.startsWith("o|") ? amzOrders().find(o => o.key === key) || null : amzShips().find(x => x.key === key) || null; }
+function amzLabel(sh){ const it = sh.items.filter(Boolean); return it.length ? it.slice(0, 2).map(n => n.length > 60 ? n.slice(0, 57) + "…" : n).join(", ") + (it.length > 2 ? ` (+${it.length - 2} more)` : "") : "Amazon order " + sh.order; }
+function amzCharges(){
+  const out = [];
+  periodList().forEach(p => (S.periods[p].txns || []).forEach(t => { if (t.fund !== "income" && +t.amount > 0 && AMAZON_RE.test((t.desc || "") + " " + (t.orig || ""))) out.push({kind:"tx", p, ref:t, amt: Math.abs(t.bank !== undefined ? t.bank : t.amount), date:t.date}); }));
+  S.inbox.items.forEach(i => { if (i.status === "pending" && i.flow < 0 && AMAZON_RE.test(i.desc + " " + (i.orig || ""))) out.push({kind:"rv", p:null, ref:i, amt: Math.abs(i.bank !== undefined ? i.bank : i.flow), date:i.date}); });
+  return out;
+}
+function amzLinkedKeys(){ return new Set(amzCharges().map(c => c.ref.amz).filter(Boolean)); }
+const dayDiff = (a, b) => (toD(a) - toD(b)) / 864e5;
+function amzCandidates(c, wide){
+  const used = amzLinkedKeys();
+  const pool = [...amzShips(), ...amzOrders()].filter(sh => !used.has(sh.key) || sh.key === c.ref.amz);
+  return pool.map(sh => ({sh, diff: Math.abs(sh.total - c.amt), days: dayDiff(c.date, sh.ship || sh.date)}))
+    .filter(x => wide ? Math.abs(x.days) <= 21 : (x.diff < 0.015 && x.days >= -3 && x.days <= 7))
+    .sort((a,b) => a.diff - b.diff || Math.abs(a.days) - Math.abs(b.days));
+}
+function amzLink(c, key){
+  const sh = amzFind(key); if (!sh) return;
+  c.ref.amz = key;
+  if (!c.ref.details) c.ref.details = amzLabel(sh);
+  return c.kind === "tx" ? savePeriod(c.p) : saveInbox();
+}
+function amzAutoLink(){
+  // Link only when the match is unambiguous both ways: one order fits the charge, and that order fits only this charge.
+  const charges = amzCharges().filter(c => !c.ref.amz), claims = {};
+  const picks = [];
+  for (const c of charges){ const cand = amzCandidates(c, false); if (cand.length === 1){ picks.push([c, cand[0].sh.key]); claims[cand[0].sh.key] = (claims[cand[0].sh.key] || 0) + 1; } }
+  let n = 0; const touched = new Set(); let inbox = false;
+  for (const [c, key] of picks) if (claims[key] === 1){ c.ref.amz = key; if (!c.ref.details) c.ref.details = amzLabel(amzFind(key)); if (c.kind === "tx") touched.add(c.p); else inbox = true; n++; }
+  touched.forEach(p => savePeriod(p)); if (inbox) saveInbox();
+  return n;
+}
+function amzParse(rows){
+  const hi = rows.findIndex((r, i) => i < 20 && r.some(c => /order id/i.test(c)) && r.some(c => /product name|title/i.test(c)));
+  if (hi < 0) return null;
+  const H = rows[hi].map(h => h.trim().toLowerCase()), col = re => H.findIndex(h => re.test(h));
+  const cId = col(/^order id$|order id/), cDate = col(/^order date/), cShip = col(/ship date/), cName = col(/product name|^title$/),
+        cTotal = col(/^total owed$/), cAmt = cTotal >= 0 ? cTotal : col(/item total|total amount|shipment item subtotal$/), cUnit = col(/^unit price$/), cTax = col(/^unit price tax$/), cQty = col(/^quantity$/), cStatus = col(/order status/);
+  if (cId < 0 || cDate < 0) return null;
+  const ships = {};
+  for (const r of rows.slice(hi + 1)){
+    const id = (r[cId] || "").trim(); if (!id) continue;
+    if (cStatus >= 0 && /cancel/i.test(r[cStatus] || "")) continue;
+    const date = parseDate(r[cDate]); if (!date) continue;
+    const ship = cShip >= 0 ? (parseDate(r[cShip]) || date) : date;
+    let amt = cAmt >= 0 ? parseAmt(r[cAmt]) : NaN;
+    if (isNaN(amt) && cUnit >= 0) amt = ((parseAmt(r[cUnit]) || 0) + (cTax >= 0 ? (parseAmt(r[cTax]) || 0) : 0)) * (cQty >= 0 ? (parseFloat(r[cQty]) || 1) : 1);
+    if (isNaN(amt)) continue;
+    const key = id + "|" + ship;
+    const sh = ships[key] = ships[key] || {key, order: id, date, ship, total: 0, items: []};
+    sh.total = r2(sh.total + Math.abs(amt));
+    const name = cName >= 0 ? (r[cName] || "").trim() : ""; if (name && !sh.items.includes(name)) sh.items.push(name);
+  }
+  return Object.values(ships).filter(sh => sh.total > 0);
+}
+async function amzImport(file){
+  try{
+    let texts = [];
+    if (/\.zip$/i.test(file.name)){
+      if (!window.JSZip) throw new Error("The zip reader didn’t load. Unzip the file and pick the CSV inside instead.");
+      const zip = await JSZip.loadAsync(await file.arrayBuffer());
+      const csvs = Object.values(zip.files).filter(f => !f.dir && /\.csv$/i.test(f.name));
+      for (const f of csvs) texts.push(await f.async("string"));
+    } else texts.push(await file.text());
+    let ships = [];
+    for (const t of texts){ const got = amzParse(parseCSV(t)); if (got) ships = ships.concat(got); }
+    if (!ships.length) throw new Error("No orders found. Pick the Amazon order history file (Retail.OrderHistory or Your Orders).");
+    const byKey = Object.fromEntries(amzShips().map(sh => [sh.key, sh]));
+    ships.forEach(sh => { byKey[sh.key] = sh; });
+    S.amazon = {kind:"amazon", ships: Object.values(byKey).sort((a,b) => b.ship.localeCompare(a.ship)), at: Date.now()};
+    await store.save("amazon", S.amazon);
+    const n = amzAutoLink();
+    render(); toast(`${ships.length} Amazon shipment${ships.length===1?"":"s"} imported. ${n} charge${n===1?"":"s"} linked automatically.`);
+  }catch(e){ toast(e.message || "Couldn’t read that file."); }
+}
+function amzPickSheet(kind, p, id){
+  const c = amzCharges().find(x => x.kind === kind && x.ref.id === id); if (!c) return;
+  const cand = amzCandidates(c, true).slice(0, 20);
+  openSheet(`<h2>Which Amazon order?</h2>
+    <p class="muted" style="margin:-6px 0 12px">Charge of ${money(c.amt)} on ${esc(short(c.date))}. Closest amounts first, from 3 weeks either side.</p>
+    ${cand.length ? `<div class="list">${cand.map(x => `<div class="tx" style="cursor:default;align-items:flex-start"><span class="mid"><span class="d" style="display:block;white-space:normal">${esc(amzLabel(x.sh))}</span><span class="c">${x.sh.key.startsWith("o|") ? "Whole order" : "Shipped"} ${esc(short(x.sh.ship))} • #${esc(x.sh.order)}${x.diff < 0.015 ? " • exact amount" : ""}</span></span>
+      <span style="text-align:right"><span class="a num" style="display:block">${money(x.sh.total)}</span><button class="btn sm" style="margin-top:6px" data-act="amz-link" data-k="${esc(kind)}|${esc(p || "")}|${esc(id)}" data-key="${esc(x.sh.key)}">Link</button></span></div>`).join("")}</div>` : `<p class="muted">No Amazon orders within 3 weeks of this charge. Import a newer order history.</p>`}
+    <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn ghost" data-act="close">Close</button></div>`);
+}
+function amzPanel(){
+  const ships = amzShips(), linked = amzLinkedKeys();
+  const newest = ships.length ? ships.reduce((a, s) => s.ship > a ? s.ship : a, "") : null;
+  return `<div class="panel" style="margin:0 0 12px">
+    <h3 style="margin-bottom:4px">Your Amazon orders</h3>
+    <p class="small muted" style="margin:0 0 10px">${ships.length ? `${ships.length} shipments imported, newest from ${esc(short(newest))}. ${[...linked].length} linked to charges.` : "Import your order history to see what every Amazon charge was."}</p>
+    <div class="row"><label class="btn ${ships.length ? "ghost" : ""} sm" style="display:inline-flex;align-items:center;cursor:pointer">${ships.length ? "Import a newer history" : "Import Amazon order history"}<input type="file" id="amzIn" accept=".zip,.csv,application/zip,text/csv" style="position:absolute;width:1px;height:1px;opacity:0"></label>${ships.length ? `<button class="btn ghost sm" data-act="amz-auto">Match again</button>` : ""}</div>
+    <details style="margin-top:10px"><summary class="small" style="cursor:pointer;font-weight:700">How to get your order history</summary>
+      <p class="small muted" style="margin:8px 0 0">1. On amazon.com (easiest on a computer), open Account, then <b>Request Your Data</b> (under Data and Privacy).<br>2. Choose <b>Your Orders</b> and submit, then confirm the email Amazon sends.<br>3. Amazon emails a download link, usually within a few days. Download the zip and pick it here, no need to unzip.<br>Do it again every month or two to bring in newer orders. Anything already imported is just updated, never doubled.</p></details>
+  </div>`;
+}
+function amzOrdersList(){
+  const ships = amzShips(); if (!ships.length) return `<div class="list"><div class="empty"><h3>No Amazon orders yet</h3>Import your order history above.</div></div>`;
+  const byKey = {}; amzCharges().forEach(c => { if (c.ref.amz) byKey[c.ref.amz] = c; });
+  const q = (S.q || "").trim().toLowerCase();
+  const rows = ships.filter(sh => !q || sh.items.join(" ").toLowerCase().includes(q) || sh.order.includes(q) || sh.total.toFixed(2).includes(q)).slice(0, 300);
+  return `<p class="small muted" style="margin:0 0 8px">${rows.length} shipment${rows.length===1?"":"s"}, newest first.</p><div class="list">${rows.map(sh => { const c = byKey[sh.key] || (() => { const o = Object.keys(byKey).find(k => k === "o|" + sh.order); return o ? byKey[o] : null; })();
+    return `<div class="tx" style="cursor:default;align-items:flex-start"><span class="mid"><span class="d" style="display:block;white-space:normal">${esc(amzLabel(sh))}</span><span class="c">Shipped ${esc(short(sh.ship))} • #${esc(sh.order)}<br>${c ? `Linked to the ${money(c.amt)} charge on ${esc(short(c.date))}` : "No charge linked yet"}</span></span><span class="a num">${money(sh.total)}</span></div>`; }).join("")}</div>`;
+}
+
+/* ---------- search (with Amazon labeling) ---------- */
+const AMAZON_RE = /amazon|amzn|kindle|audible|prime video|amazon prime/i;
+function searchRows(){
+  const q = (S.q || "").trim().toLowerCase(), mode = S.qMode || "amazon";
+  const rows = [];
+  periodList().forEach(p => (S.periods[p].txns || []).forEach(t => rows.push({kind:"tx", p, id:t.id, date:t.date, desc:t.desc, orig:t.orig || "", details:t.details || "", amount: t.fund === "income" ? +t.amount : -(+t.amount), fund:t.fund, src:t.src, amz:t.amz})));
+  S.inbox.items.filter(i => i.status === "pending").forEach(i => rows.push({kind:"rv", p: periodFor(i.date), id:i.id, date:i.date, desc:i.desc, orig:i.orig || "", details:i.details || "", amount:i.flow, fund:i.fund, src:i.src, amz:i.amz}));
+  return rows.filter(r => {
+    const text = (r.desc + " " + r.orig + " " + r.details).toLowerCase();
+    if ((mode === "amazon" || mode === "amazon-unlabeled") && !AMAZON_RE.test(r.desc + " " + r.orig)) return false;
+    // Spreadsheet entries like "amazon license plate bulbs" already say what the item was.
+    if (mode === "amazon-unlabeled" && (r.details || (r.src === "sheet" && r.desc.replace(AMAZON_RE, "").replace(/[^a-z]/gi, "").length > 2))) return false;
+    if (q && !text.includes(q) && !String(Math.abs(r.amount).toFixed(2)).includes(q)) return false;
+    return true;
+  }).sort((a,b) => b.date.localeCompare(a.date));
+}
+function amzRowExtra(r){
+  if (!amzShips().length || r.amount >= 0 || !AMAZON_RE.test(r.desc + " " + r.orig)) return "";
+  const k = `${esc(r.kind)}|${esc(r.p || "")}|${esc(r.id)}`;
+  if (r.amz){ const sh = amzFind(r.amz); return `<div class="small" style="margin:0 0 8px;padding:8px 10px;border-radius:10px;background:var(--sunk)">🔗 ${sh ? `${esc(amzLabel(sh))} <span class="muted">• #${esc(sh.order)}, shipped ${esc(short(sh.ship))}</span>` : "Linked order not found"} <button class="btn ghost sm" style="margin-left:6px;min-height:30px;padding:3px 10px" data-act="amz-unlink" data-k="${k}">Unlink</button></div>`; }
+  const c = amzCharges().find(x => x.kind === r.kind && x.ref.id === r.id); const best = c ? amzCandidates(c, false)[0] : null;
+  return `<div class="small" style="margin:0 0 8px;padding:8px 10px;border-radius:10px;background:var(--sunk)">${best ? `Looks like: <b>${esc(amzLabel(best.sh))}</b> <span class="muted">(${money(best.sh.total)}, shipped ${esc(short(best.sh.ship))})</span><div class="row" style="margin-top:6px"><button class="btn sm" data-act="amz-link" data-k="${k}" data-key="${esc(best.sh.key)}">Link it</button><button class="btn ghost sm" data-act="amz-pick" data-k="${k}">Pick another order</button></div>` : `<span class="muted">No order with this exact amount.</span> <button class="btn ghost sm" style="margin-left:6px" data-act="amz-pick" data-k="${k}">Pick an order</button>`}</div>`;
+}
+function searchResults(){
+  if (S.qMode === "amazon-orders") return amzOrdersList();
+  const rows = searchRows(), shown = rows.slice(0, 300);
+  const spent = rows.filter(r => r.amount < 0).reduce((a,r) => a - r.amount, 0);
+  if (!rows.length) return `<div class="list"><div class="empty"><h3>${S.qMode === "amazon-unlabeled" ? "Every Amazon charge has a label" : "Nothing found"}</h3>${S.qMode === "amazon-unlabeled" ? "Nice work." : "Try another word or amount."}</div></div>`;
+  return `<p class="small muted" style="margin:0 0 8px">${rows.length} charge${rows.length===1?"":"s"}, ${money(spent)} spent${rows.length > shown.length ? `. Showing the newest ${shown.length}` : ""}.</p>
+  <div class="list">${shown.map(r => `<div style="padding:12px 14px;border-top:1px solid var(--line)">
+    <div class="row" style="justify-content:space-between;flex-wrap:nowrap;align-items:flex-start"><b style="min-width:0;overflow-wrap:anywhere">${esc(r.desc)}</b><span class="num" style="font-family:var(--display);font-weight:700;white-space:nowrap;${r.amount>0?"color:var(--pos)":""}">${r.amount > 0 ? "+" + money(r.amount) : money(-r.amount)}</span></div>
+    <div class="small muted" style="margin:2px 0 8px">${esc(longDay(r.date))}${r.p ? ` • ${esc(short(r.p))} paycheck` : ""}${r.src && SOURCES[r.src] ? ` • ${esc(SOURCES[r.src])}` : ""}${r.kind === "rv" ? ` • <span class="chip">In Review</span>` : ""}</div>
+    ${amzRowExtra(r)}
+    <input class="input" data-label="${r.kind}|${esc(r.p || "")}|${esc(r.id)}" value="${esc(r.details)}" placeholder="What was it? e.g. phone case, birthday gift" aria-label="What was ${esc(r.desc)} on ${esc(short(r.date))}?" enterkeyhint="done">
+  </div>`).join("")}</div>`;
+}
+function viewSearch(){
+  const mode = S.qMode || "amazon";
+  const chip = (k, l) => `<button data-act="q-mode" data-m="${k}" aria-pressed="${mode===k}">${l}</button>`;
+  return `<div class="topbar"><h1 style="display:flex;align-items:center;gap:12px"><button class="iconbtn" data-tab="home" aria-label="Back to Paycheck">${ICONS.left}</button>Search</h1></div>
+  <input class="input" id="q" type="search" value="${esc(S.q || "")}" placeholder="Search names, labels or amounts" autocomplete="off" style="margin-bottom:10px">
+  <div class="seg" style="margin-bottom:12px">${chip("amazon","Amazon")}${chip("amazon-unlabeled","Amazon without a label")}${chip("amazon-orders","Amazon orders")}${chip("all","Everything")}</div>
+  ${mode !== "all" ? amzPanel() : ""}
+  ${mode !== "all" && mode !== "amazon-orders" ? `<p class="small muted" style="margin:0 0 12px">Type what you bought in the box under each charge. It saves when you leave the box. To look items up, open <a href="https://www.amazon.com/gp/css/order-history" target="_blank" rel="noopener" style="color:var(--ink)">Your Orders on Amazon</a> and match the date and amount. Amazon charges your card when each package ships, so one order can show up as more than one charge.</p>` : ""}
+  <div id="qres">${searchResults()}</div>`;
+}
+function saveLabel(key, value){
+  const [kind, p, id] = key.split("|"); const v = value.trim();
+  if (kind === "tx"){ const per = S.periods[p]; const t = per && (per.txns || []).find(x => x.id === id); if (!t) return; if ((t.details || "") === v) return; if (v) t.details = v; else delete t.details; savePeriod(p); }
+  else { const it = S.inbox.items.find(i => i.id === id); if (!it) return; if ((it.details || "") === v) return; if (v) it.details = v; else delete it.details; saveInbox(); }
+  toast(v ? "Label saved." : "Label removed.");
+}
 function viewHome(){
   const list = periodList();
   if (!list.length) return `
@@ -507,7 +675,7 @@ function viewHome(){
 
   return `
   <div class="topbar home">
-    <h1>Paycheck</h1>
+    <h1 style="display:flex;align-items:center;gap:12px">Paycheck <button class="iconbtn" data-act="open-search" aria-label="Search charges" title="Search charges"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></button></h1>
     <div class="period-nav">
       <button class="iconbtn" data-act="prev" ${S.pIdx===0?"disabled":""} aria-label="Previous paycheck">${ICONS.left}</button>
       <div class="period-label">${short(p)} – ${short(end)}<small>${latest ? (daysLeft ? daysLeft + " day" + (daysLeft>1?"s":"") + " left" : "Ended") : "Past paycheck"}</small></div>
@@ -1119,7 +1287,7 @@ function learn(it){
   if (sk && S.rules.save[sk]){ delete S.rules.save[sk]; S.rules._dirty = true; }
   const k = norm(it.orig || it.desc); if (!k || it.fund === "paycheck") return; if (S.rules.map[k] !== it.fund){ S.rules.map[k] = it.fund; S.rules._dirty = true; } }
 function saveRules(){ if (S.rules._dirty){ delete S.rules._dirty; store.save("rules", S.rules); } }
-function txFromItem(it){ const t = {id: uid(), date: it.date, desc: it.desc, fund: it.fund, amount: it.fund === "income" ? r2(it.flow) : r2(-it.flow), src: it.src}; if (it.details) t.details = it.details; return t; }
+function txFromItem(it){ const t = {id: uid(), date: it.date, desc: it.desc, fund: it.fund, amount: it.fund === "income" ? r2(it.flow) : r2(-it.flow), src: it.src}; if (it.details) t.details = it.details; if (it.amz) t.amz = it.amz; return t; }
 
 const busyIds = new Set();
 async function confirmItems(ids){
@@ -1735,6 +1903,12 @@ document.addEventListener("click", async e => {
   else if (a === "imp-add"){ const r = S.imports.find(x => x.id === id); if (r) addImport(r); }
   else if (a === "range"){ S.range = el.dataset.r; render(); }
   else if (a === "save-moved") movedSheet();
+  else if (a === "open-search"){ S.qMode = S.qMode || "amazon"; go("search"); }
+  else if (a === "q-mode"){ S.qMode = el.dataset.m; render(); }
+  else if (a === "amz-pick"){ const [k, p, i] = el.dataset.k.split("|"); amzPickSheet(k, p, i); }
+  else if (a === "amz-link"){ const [k, , i] = el.dataset.k.split("|"); const c = amzCharges().find(x => x.kind === k && x.ref.id === i); if (c){ amzLink(c, el.dataset.key); closeSheet(); render(); toast("Linked."); } }
+  else if (a === "amz-unlink"){ const [k, , i] = el.dataset.k.split("|"); const c = amzCharges().find(x => x.kind === k && x.ref.id === i); if (c){ const sh = amzFind(c.ref.amz); if (sh && c.ref.details === amzLabel(sh)) delete c.ref.details; delete c.ref.amz; c.kind === "tx" ? savePeriod(c.p) : saveInbox(); render(); toast("Unlinked."); } }
+  else if (a === "amz-auto"){ const n = amzAutoLink(); render(); toast(n ? `${n} more charge${n===1?"":"s"} linked.` : "No new exact matches. Use Pick an order on the rest."); }
   else if (a === "save-moved-ok"){
     const amt = r2(Math.abs(parseAmt($("#m-amt").value))), date = $("#m-date").value, note = $("#m-note").value.trim();
     if (!(amt > 0)){ toast("Enter how much you moved."); return; }
@@ -1826,8 +2000,10 @@ document.addEventListener("click", async e => {
   else if (a === "clear-rules"){ S.rules = {map:{}}; store.save("rules", S.rules); render(); toast("Learned merchants cleared."); }
   else if (a === "theme"){ const t = el.dataset.t; if (t === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t; try{ localStorage.setItem("payday-theme", t); }catch(_){} render(); }
 });
-document.addEventListener("input", e => { if (e.target.id === "gh-repo" || e.target.id === "gh-token") ghRead(); });
+document.addEventListener("input", e => { if (e.target.id === "gh-repo" || e.target.id === "gh-token") ghRead(); if (e.target.id === "q"){ S.q = e.target.value; $("#qres").innerHTML = searchResults(); } });
 document.addEventListener("change", e => {
+  if (e.target.id === "amzIn" && e.target.files.length){ amzImport(e.target.files[0]); e.target.value = ""; return; }
+  if (e.target.dataset && e.target.dataset.label){ saveLabel(e.target.dataset.label, e.target.value); return; }
   if (e.target.id === "plaid-url"){ S.settings = {...S.settings, plaidUrl: e.target.value.trim(), kind:"settings"}; store.save("settings", S.settings); PL.items = null; PL.err = ""; render(); plaidAutoLoad(); return; }
   if (e.target.dataset && e.target.dataset.act === "plaid-period"){ PL.pick = e.target.value; render(); return; }
   if (e.target.dataset && e.target.dataset.act === "plaid-map"){ S.settings = {...S.settings, plaidMap: {...(S.settings.plaidMap || {}), [e.target.dataset.id]: e.target.value}, kind:"settings"}; store.save("settings", S.settings); toast("Got it."); return; }
@@ -1841,7 +2017,8 @@ document.addEventListener("change", e => {
 document.addEventListener("dragover", e => { const d = e.target.closest && e.target.closest("#drop"); if (d){ e.preventDefault(); d.classList.add("over"); } });
 document.addEventListener("dragleave", e => { const d = e.target.closest && e.target.closest("#drop"); if (d) d.classList.remove("over"); });
 document.addEventListener("drop", e => { const d = e.target.closest && e.target.closest("#drop"); if (d){ e.preventDefault(); d.classList.remove("over"); if (e.dataTransfer.files.length) handleFiles([...e.dataTransfer.files]); } });
-document.addEventListener("keydown", e => { if (e.key === "Escape") closeSheet(); });
+document.addEventListener("keydown", e => {
+  if (e.key === "Enter" && e.target.dataset && e.target.dataset.label){ e.target.blur(); return; } if (e.key === "Escape") closeSheet(); });
 $("#fab").addEventListener("click", () => txSheet(null));
 
 try{ const t = localStorage.getItem("payday-theme"); if (t && t !== "auto") document.documentElement.dataset.theme = t; }catch(_){}
