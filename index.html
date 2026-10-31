@@ -513,11 +513,11 @@ function amzAutoLink(){
   return n;
 }
 function amzParse(rows){
-  const hi = rows.findIndex((r, i) => i < 20 && r.some(c => /order id/i.test(c)) && r.some(c => /product name|title/i.test(c)));
+  const hi = rows.findIndex((r, i) => i < 20 && r.some(c => /order id/i.test(c)) && r.some(c => /product name|title|^items?$/i.test(c.trim())));
   if (hi < 0) return null;
   const H = rows[hi].map(h => h.trim().toLowerCase()), col = re => H.findIndex(h => re.test(h));
-  const cId = col(/^order id$|order id/), cDate = col(/^order date/), cShip = col(/ship date/), cName = col(/product name|^title$/),
-        cTotal = col(/^total owed$/), cAmt = cTotal >= 0 ? cTotal : col(/item total|total amount|shipment item subtotal$/), cUnit = col(/^unit price$/), cTax = col(/^unit price tax$/), cQty = col(/^quantity$/), cStatus = col(/order status/);
+  const cId = col(/^order id$|order id/), cDate = (() => { const a = col(/^order date/); return a >= 0 ? a : col(/^date$/); })(), cShip = col(/ship date/), cName = col(/product name|^title$|^items?$/),
+        cTotal = col(/^total owed$/), cAmt = cTotal >= 0 ? cTotal : col(/item total|total amount|shipment item subtotal$|^total$/), cUnit = col(/^unit price$/), cTax = col(/^unit price tax$/), cQty = col(/^quantity$/), cStatus = col(/order status/);
   if (cId < 0 || cDate < 0) return null;
   const ships = {};
   for (const r of rows.slice(hi + 1)){
@@ -535,6 +535,62 @@ function amzParse(rows){
   }
   return Object.values(ships).filter(sh => sh.total > 0);
 }
+async function amzMerge(ships){
+  const fromFile = ships.filter(sh => !sh.pasted), fileOrders = new Set(fromFile.map(sh => sh.order));
+  const byKey = {};
+  for (const sh of amzShips()) if (!(sh.pasted && fileOrders.has(sh.order))) byKey[sh.key] = sh;
+  for (const sh of ships){
+    if (sh.pasted && Object.values(byKey).some(x => !x.pasted && x.order === sh.order)) continue; // already have the detailed version
+    const old = byKey[sh.key]; byKey[sh.key] = old && old.items.length > sh.items.length && sh.pasted ? {...sh, items: old.items} : sh;
+  }
+  S.amazon = {kind:"amazon", ships: Object.values(byKey).sort((a,b) => b.ship.localeCompare(a.ship)), at: Date.now()};
+  await store.save("amazon", S.amazon);
+  // Charges linked to a pasted order keep their link when the detailed file replaces it.
+  const touched = new Set(); let inbox = false;
+  for (const c of amzCharges()){
+    if (!c.ref.amz || amzFind(c.ref.amz)) continue;
+    const order = c.ref.amz.replace(/^o\|/, "").split("|")[0], parts = amzShips().filter(sh => sh.order === order);
+    if (!parts.length) continue;
+    const exact = parts.find(sh => Math.abs(sh.total - c.amt) < 0.015);
+    c.ref.amz = exact ? exact.key : parts.length > 1 ? "o|" + order : parts[0].key;
+    if (c.kind === "tx") touched.add(c.p); else inbox = true;
+  }
+  touched.forEach(p => savePeriod(p)); if (inbox) saveInbox();
+  return amzAutoLink();
+}
+// Reads the text you get by selecting everything on Amazon's Your Orders page and copying it.
+function amzParseText(text){
+  const lines = text.replace(/\r/g, "").split("\n").map(l => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const STOP = /^(buy it again|view your item|view item|track package|return or replace items?|return items?|replace items?|write a (product )?review|leave seller feedback|view order details|order details|view invoice|invoice|archive order|get product support|get help with order|ask product question|share gift receipt|problem with order|cancel items?|view related transactions|see all|show more|sold by|return window|eligible for return|returned|refund|your package|package (was|is)|delivered|arriving|now arriving|expected|shipped|not yet shipped|it'?s on the way|out for delivery|auto-?delivered|subscribe|subscription|quantity|qty|condition|gift|ship to|order placed|total|order #|recipient|buy again|your orders|orders|search all orders|digital orders|cancelled orders|local store orders|amazon pay|not yet dispatched|dispatched|paid|price|deliver|leave a review|product support|you purchased|purchased|this item|change|apply|filter|past \d+|\d{4}$)/i;
+  const out = []; let cur = null, afterShipTo = false;
+  const finish = () => { if (cur && cur.order && cur.date && cur.total > 0){ out.push({key: cur.order + "|" + cur.date, order: cur.order, date: cur.date, ship: cur.date, total: cur.total, items: cur.items, pasted: true}); } };
+  for (let i = 0; i < lines.length; i++){
+    const l = lines[i];
+    let m;
+    if ((m = l.match(/^order placed:?\s*(.*)$/i))){ finish(); cur = {items: []}; const d = m[1] || lines[i+1] || ""; cur.date = parseDate(d.replace(/^on /i, "")); if (!m[1]) i++; continue; }
+    if (!cur) continue;
+    if ((m = l.match(/^total:?\s*(.*)$/i)) && cur.total === undefined){ const v = m[1] || lines[i+1] || ""; const a = parseAmt(v); if (!isNaN(a)){ cur.total = Math.abs(a); if (!m[1]) i++; } continue; }
+    if ((m = l.match(/order\s*#\s*:?\s*([0-9D][0-9A-Z]{2}-\d{7}-\d{7})/i))){ cur.order = m[1]; continue; }
+    if (/^ship to:?$/i.test(l)){ afterShipTo = true; continue; }
+    if (afterShipTo){ afterShipTo = false; if (l.length < 40) continue; }
+    if (!cur.order) continue;
+    if (STOP.test(l) || /^\$?[\d,.]+$/.test(l) || /^(sold|supplied|shipped|fulfilled) by/i.test(l) || l.length < 12 || !/[a-z]{3}/i.test(l)) continue;
+    if (/^(january|february|march|april|may|june|july|august|september|october|november|december|mon|tue|wed|thu|fri|sat|sun)/i.test(l) && l.length < 30) continue;
+    if (!cur.items.includes(l) && cur.items.length < 12) cur.items.push(l);
+  }
+  finish();
+  return out;
+}
+function amzPasteSheet(){
+  openSheet(`<h2>Paste your Amazon orders</h2>
+    <ol class="small muted" style="margin:0 0 12px;padding-left:18px;line-height:1.6">
+      <li>Open <a href="https://www.amazon.com/gp/css/order-history" target="_blank" rel="noopener" style="color:var(--ink)">Your Orders on Amazon</a>. A computer is easiest.</li>
+      <li>Select everything on the page (<b>Ctrl+A</b>, or on a phone long-press any text and tap <b>Select all</b>), then copy.</li>
+      <li>Paste it below and tap Import. For older orders, go to the next page on Amazon and paste again. Pasting the same orders twice is fine.</li>
+    </ol>
+    <textarea class="input" id="amzPaste" placeholder="Paste the Your Orders page here" style="min-height:160px;font-family:var(--body)"></textarea>
+    <div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="amz-paste-ok">Import</button></div>`);
+}
 async function amzImport(file){
   try{
     let texts = [];
@@ -547,11 +603,7 @@ async function amzImport(file){
     let ships = [];
     for (const t of texts){ const got = amzParse(parseCSV(t)); if (got) ships = ships.concat(got); }
     if (!ships.length) throw new Error("No orders found. Pick the Amazon order history file (Retail.OrderHistory or Your Orders).");
-    const byKey = Object.fromEntries(amzShips().map(sh => [sh.key, sh]));
-    ships.forEach(sh => { byKey[sh.key] = sh; });
-    S.amazon = {kind:"amazon", ships: Object.values(byKey).sort((a,b) => b.ship.localeCompare(a.ship)), at: Date.now()};
-    await store.save("amazon", S.amazon);
-    const n = amzAutoLink();
+    const n = await amzMerge(ships);
     render(); toast(`${ships.length} Amazon shipment${ships.length===1?"":"s"} imported. ${n} charge${n===1?"":"s"} linked automatically.`);
   }catch(e){ toast(e.message || "Couldn’t read that file."); }
 }
@@ -570,8 +622,9 @@ function amzPanel(){
   return `<div class="panel" style="margin:0 0 12px">
     <h3 style="margin-bottom:4px">Your Amazon orders</h3>
     <p class="small muted" style="margin:0 0 10px">${ships.length ? `${ships.length} shipments imported, newest from ${esc(short(newest))}. ${[...linked].length} linked to charges.` : "Import your order history to see what every Amazon charge was."}</p>
-    <div class="row"><label class="btn ${ships.length ? "ghost" : ""} sm" style="display:inline-flex;align-items:center;cursor:pointer">${ships.length ? "Import a newer history" : "Import Amazon order history"}<input type="file" id="amzIn" accept=".zip,.csv,application/zip,text/csv" style="position:absolute;width:1px;height:1px;opacity:0"></label>${ships.length ? `<button class="btn ghost sm" data-act="amz-auto">Match again</button>` : ""}</div>
-    <details style="margin-top:10px"><summary class="small" style="cursor:pointer;font-weight:700">How to get your order history</summary>
+    <div class="row"><button class="btn sm" data-act="amz-paste">Paste from Your Orders</button><label class="btn ghost sm" style="display:inline-flex;align-items:center;cursor:pointer">Import a file<input type="file" id="amzIn" accept=".zip,.csv,application/zip,text/csv" style="position:absolute;width:1px;height:1px;opacity:0"></label>${ships.length ? `<button class="btn ghost sm" data-act="amz-auto">Match again</button>` : ""}</div>
+    <p class="small muted" style="margin:10px 0 0"><b style="color:var(--ink)">Paste</b> is instant: copy your Your Orders page on Amazon and paste it in. <b style="color:var(--ink)">Import a file</b> is optional and gives exact per-package amounts.</p>
+    <details style="margin-top:8px"><summary class="small" style="cursor:pointer;font-weight:700">Getting the file (optional, slower)</summary>
       <p class="small muted" style="margin:8px 0 0">1. On amazon.com (easiest on a computer), open Account, then <b>Request Your Data</b> (under Data and Privacy).<br>2. Choose <b>Your Orders</b> and submit, then confirm the email Amazon sends.<br>3. Amazon emails a download link, usually within a few days. Download the zip and pick it here, no need to unzip.<br>Do it again every month or two to bring in newer orders. Anything already imported is just updated, never doubled.</p></details>
   </div>`;
 }
@@ -1908,6 +1961,13 @@ document.addEventListener("click", async e => {
   else if (a === "amz-pick"){ const [k, p, i] = el.dataset.k.split("|"); amzPickSheet(k, p, i); }
   else if (a === "amz-link"){ const [k, , i] = el.dataset.k.split("|"); const c = amzCharges().find(x => x.kind === k && x.ref.id === i); if (c){ amzLink(c, el.dataset.key); closeSheet(); render(); toast("Linked."); } }
   else if (a === "amz-unlink"){ const [k, , i] = el.dataset.k.split("|"); const c = amzCharges().find(x => x.kind === k && x.ref.id === i); if (c){ const sh = amzFind(c.ref.amz); if (sh && c.ref.details === amzLabel(sh)) delete c.ref.details; delete c.ref.amz; c.kind === "tx" ? savePeriod(c.p) : saveInbox(); render(); toast("Unlinked."); } }
+  else if (a === "amz-paste") amzPasteSheet();
+  else if (a === "amz-paste-ok"){
+    const ships = amzParseText($("#amzPaste").value || "");
+    if (!ships.length){ toast("No orders found in that text. Copy the whole Your Orders page, including the “Order placed” and “Order #” parts."); return; }
+    const n = await amzMerge(ships); closeSheet(); render();
+    toast(`${ships.length} order${ships.length===1?"":"s"} added. ${n} charge${n===1?"":"s"} linked automatically.`);
+  }
   else if (a === "amz-auto"){ const n = amzAutoLink(); render(); toast(n ? `${n} more charge${n===1?"":"s"} linked.` : "No new exact matches. Use Pick an order on the rest."); }
   else if (a === "save-moved-ok"){
     const amt = r2(Math.abs(parseAmt($("#m-amt").value))), date = $("#m-date").value, note = $("#m-note").value.trim();
