@@ -474,6 +474,7 @@ function viewHome(){
       <button class="iconbtn" data-act="next" ${latest?"disabled":""} aria-label="Next paycheck">${ICONS.right}</button>
     </div>
   </div>
+  ${latest && plaidUrl() ? `<button class="banner" data-act="home-pull" ${PL.busy ? "disabled" : ""}><span class="dot" style="background:var(--personal);border:1.5px solid var(--ink)"></span><span><b>${PL.busy ? `<span class="spinner"></span> ${esc(PL.busy)}` : "Pull new charges from my bank"}</b><span class="small muted">${PL.err ? esc(PL.err) : "Everything for this paycheck goes to Review"}</span></span><span class="go">${PL.busy ? "" : "Pull"}</span></button>${PL.last && !PL.busy ? `<div style="margin:-6px 0 12px;text-align:right"><button class="btn ghost sm" data-act="pull-results">See what the last pull found</button></div>` : ""}` : ""}
   ${banners.join("")}
   <div class="home-grid">
     <div class="col-left">
@@ -803,7 +804,7 @@ async function plaidCall(action, body = {}){
   if (!res.ok) throw new Error(j.error || "Your server said " + res.status + ".");
   return j;
 }
-function plaidSet(busy, err){ PL.busy = busy || ""; PL.err = err || ""; if (S.view === "accounts") render(); }
+function plaidSet(busy, err){ PL.busy = busy || ""; PL.err = err || ""; if (S.view === "accounts" || S.view === "home") render(); }
 async function plaidLoad(){
   plaidSet("Loading your accounts…");
   try{ PL.items = (await plaidCall("items")).items; plaidSet(""); }
@@ -1678,6 +1679,12 @@ document.addEventListener("click", async e => {
   else if (a === "plaid-refresh") plaidLoad();
   else if (a === "plaid-pull") plaidPull();
   else if (a === "pull-results") pullSheet();
+  else if (a === "home-pull"){
+    PL.pick = null; // always the current paycheck from here
+    if (FB.user) plaidPull();
+    else if (FB.auth){ toast("Sign in with Google first. Then the pull starts."); signIn().then(() => { if (FB.user) setTimeout(plaidPull, 800); }); }
+    else toast("Turn on sync in Settings first. Your bank server needs to know it’s you.");
+  }
   else if (a === "pull-force") pullForce(+el.dataset.i);
   else if (a === "pull-review"){ closeSheet(); go("review"); }
   else if (a === "plaid-remove"){
