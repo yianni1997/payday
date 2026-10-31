@@ -1,6 +1,6 @@
 // Payday offline support: keeps the app itself working with no connection.
 // Only the app's own files are cached. Sync and Google requests always go straight to the network.
-const CACHE = "payday-v13";
+const CACHE = "payday-v14";
 const SHELL = ["./", "index.html", "manifest.json", "pdf.min.js", "pdf.worker.min.js", "icon-192.png", "icon-512.png",
   "firebase-app-compat.js", "firebase-auth-compat.js", "firebase-firestore-compat.js"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });

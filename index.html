@@ -312,7 +312,21 @@ function norm(desc){
 }
 const TRANSFER_RE = /payment thank you|autopay|auto pay|automatic payment|epay|online payment|card payment|payment to chase|chase credit crd|synchrony|syncb|credit card payment|online transfer|transfer (to|from) (sav|chk|check)|mobile payment - thank|payment received/i;
 const PAYCHECK_RE = /payroll|direct dep|dir dep|salary|paycheck|\bppd\b.*pay/i;
-const GAS_RE = /\b(shell oil|shell service|exxon|exxonmobil|mobil|sunoco|speedway|citgo|valero|sheetz|getty|lukoil|circle k|fuel)\b/i;
+const GAS_RE = /\b(shell oil|shell service|exxon|exxonmobil|mobil|sunoco|speedway|citgo|valero|sheetz|getty|lukoil|circle k|fuel|bolla|gulf oil|hess|bp|cumberland farms|quickchek|kwik fill|marathon petro|conoco|phillips 66|chevron|texaco|arco|costco gas|sams fuel|gas station)\b/i;
+// Places that only ever take money. If one shows up as money coming in (PayPal's debit card does this), it's really a charge.
+const STORE_OUT_RE = /c-store|convenience|7-eleven|wawa|stewart'?s shops|quick ?chek/i;
+function fixDirection(it, rawDesc){
+  const k = norm(rawDesc), rule = (S.rules.dir || {})[k];
+  if (rule){ if ((rule === "out") !== (it.flow < 0)){ it.flow = -it.flow; return true; } return false; }
+  if (it.flow > 0 && (GAS_RE.test(rawDesc) || STORE_OUT_RE.test(rawDesc)) && !/refund|return|credit|reversal|cash ?back/i.test(rawDesc)){ it.flow = -it.flow; return true; }
+  return false;
+}
+function applyShare(it, rawDesc){
+  const sp = (S.rules.split || {})[norm(rawDesc)];
+  if (!sp || sp === 1) return;
+  it.flow = r2(it.flow * sp);
+  if (!it.details) it.details = `Your share (${Math.round(sp*100)}%) of ${money(Math.abs(it.bank))}`;
+}
 
 /* ---------- state ---------- */
 const S = {
@@ -518,7 +532,17 @@ function fundSeg(it){
   const opts = it.flow > 0 ? ["income","paycheck","personal","skip"] : ["personal","gas","debt","skip"];
   return `<div class="seg" role="group" aria-label="Where this goes">${opts.map(f => `<button data-act="pick" data-id="${esc(it.id)}" data-fund="${f}" aria-pressed="${it.fund===f}"><span class="sw" style="background:${FUNDS[f].color}"></span>${f==="personal"&&it.flow>0?"Refund":FUNDS[f].label}</button>`).join("")}</div>`;
 }
+function fixWaitingDirections(){
+  let n = 0;
+  for (const it of S.inbox.items) if (it.status === "pending" && !it.dirChecked){
+    it.dirChecked = true;
+    if (it.bank === undefined) it.bank = it.flow;
+    if (fixDirection(it, it.orig || it.desc)){ it.fund = suggest(it); n++; }
+  }
+  if (n){ setTimeout(() => { saveInbox(); toast(`${n} charge${n===1?" was":"s were"} showing as money in. Fixed.`); }, 0); }
+}
 function viewReview(){
+  fixWaitingDirections();
   const items = pending().sort((a,b) => b.date.localeCompare(a.date));
   const dups = S.inbox.items.filter(i => i.status === "dup");
   const multi = new Set(items.map(i => periodFor(i.date))).size > 1, latestP = periodList().slice(-1)[0];
@@ -1012,11 +1036,16 @@ function periodSheet(edit){
 }
 
 function itemSheet(it){
-  const orig = it.orig || it.desc;
+  const orig = it.orig || it.desc, bank = it.bank !== undefined ? it.bank : it.flow;
   openSheet(`<h2>Edit before confirming</h2>
     <label class="field"><span>Name</span><input class="input" id="i-desc" value="${esc(it.desc)}"></label>
     <label class="field"><span>Details</span><input class="input" id="i-details" value="${esc(it.details||"")}" placeholder="What it was for, who it was with…"></label>
     <label class="field"><span>Date</span><input class="input" type="date" id="i-date" value="${it.date}"></label>
+    <div class="field"><span>Money</span><div class="seg" id="i-dir"><button type="button" data-pickd="out" aria-pressed="${it.flow < 0}">Charge (money out)</button><button type="button" data-pickd="in" aria-pressed="${it.flow > 0}">Money in</button></div></div>
+    <label class="field"><span>Amount that counts for you</span><input class="input num" id="i-amt" inputmode="decimal" value="${Math.abs(it.flow).toFixed(2)}"><small>The bank charged ${money(Math.abs(bank))}. Split a bill? Enter just your part.</small></label>
+    <div class="row" style="margin:-6px 0 14px"><button type="button" class="btn ghost sm" data-share="0.5">Half: ${money(Math.abs(bank)/2)}</button><button type="button" class="btn ghost sm" data-share="1">All: ${money(Math.abs(bank))}</button></div>
+    <label class="row small" style="gap:10px;margin:0 0 10px;flex-wrap:nowrap"><input type="checkbox" id="i-split" style="width:20px;height:20px;flex:none" ${(S.rules.split||{})[norm(orig)]?"checked":""}><span>Always count the same share of “${esc(orig)}”</span></label>
+    <label class="row small" style="gap:10px;margin:0 0 10px;flex-wrap:nowrap"><input type="checkbox" id="i-dirrule" style="width:20px;height:20px;flex:none" ${(S.rules.dir||{})[norm(orig)]?"checked":""}><span>Always treat “${esc(orig)}” as this direction (charge or money in)</span></label>
     <label class="row small" style="gap:10px;margin:-2px 0 16px;flex-wrap:nowrap"><input type="checkbox" id="i-always" style="width:20px;height:20px;flex:none" ${(S.rules.names||{})[norm(orig)]?"checked":""}><span>Always rename “${esc(orig)}” to this name</span></label>
     <p class="small muted" style="margin:-6px 0 14px">Bank shows: ${esc(orig)}</p>
     <div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="save-item" data-id="${esc(it.id)}">Save</button></div>`);
@@ -1243,7 +1272,8 @@ function addImport(r){
     const fp = hash(base + "#" + counts[base]);
     if (seen.has(fp)){ skipped++; L(raw, "seen", "Came in on an earlier import or pull. It was confirmed, denied, or is already waiting in Review."); continue; }
     seen.add(fp); S.inbox.seen.push(fp);
-    const it = {id: uid(), fp, src: r.src, date: raw.date, desc: raw.desc, orig: raw.desc, flow: r2(raw.flow), status:"pending"};
+    const it = {id: uid(), fp, src: r.src, date: raw.date, desc: raw.desc, orig: raw.desc, flow: r2(raw.flow), bank: r2(raw.flow), status:"pending"};
+    fixDirection(it, raw.desc); applyShare(it, raw.desc);
     it.fund = suggest(it);
     const nm = (S.rules.names || {})[norm(raw.desc)]; if (nm) it.desc = nm;
     if (raw.pay || isCardPayment(it)){ payCount++; L(raw, "paid", "Paying off a card isn’t new spending."); continue; }
@@ -1550,6 +1580,10 @@ document.addEventListener("click", async e => {
   const tab = e.target.closest("[data-tab]");
   if (tab){ closeSheet(); go(tab.dataset.tab); return; }
   if (e.target.id === "scrim"){ closeSheet(); return; }
+  const pd = e.target.closest("[data-pickd]");
+  if (pd){ pd.parentElement.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b === pd)); return; }
+  const sh = e.target.closest("[data-share]");
+  if (sh){ const it = S.inbox.items.find(i => i.id === ($("[data-act=save-item]") || {dataset:{}}).dataset.id); if (it){ const b = Math.abs(it.bank !== undefined ? it.bank : it.flow); $("#i-amt").value = r2(b * +sh.dataset.share).toFixed(2); } return; }
   const pf = e.target.closest("[data-pickf]");
   if (pf){ pf.parentElement.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b === pf)); return; }
   const el = e.target.closest("[data-act]"); if (!el) return;
@@ -1644,8 +1678,23 @@ document.addEventListener("click", async e => {
   else if (a === "edit-item"){ const it = S.inbox.items.find(i => i.id === id); if (it) itemSheet(it); }
   else if (a === "save-item"){
     const it = S.inbox.items.find(i => i.id === id); if (!it) return;
-    const desc = $("#i-desc").value.trim(), details = $("#i-details").value.trim(), date = $("#i-date").value;
+    const desc = $("#i-desc").value.trim(), date = $("#i-date").value;
+    let details = $("#i-details").value.trim();
+    const dir = (($("#i-dir [aria-pressed=true]") || {}).dataset || {}).pickd || (it.flow < 0 ? "out" : "in");
+    const amt = r2(Math.abs(parseAmt($("#i-amt").value)));
+    if (!(amt > 0)){ toast("Enter the amount that counts for you."); return; }
     if (!it.orig) it.orig = it.desc;
+    if (it.bank === undefined) it.bank = it.flow;
+    const bankAbs = Math.abs(it.bank), wasOut = it.flow < 0;
+    it.flow = dir === "out" ? -amt : amt;
+    if (wasOut !== (it.flow < 0)) it.fund = suggest(it);
+    if (Math.abs(amt - bankAbs) > 0.004 && !details) details = `Your share of ${money(bankAbs)}`;
+    const k2 = norm(it.orig);
+    if (k2){
+      S.rules.split = S.rules.split || {}; S.rules.dir = S.rules.dir || {};
+      if ($("#i-split").checked && bankAbs > 0 && Math.abs(amt - bankAbs) > 0.004) S.rules.split[k2] = Math.round(amt / bankAbs * 10000) / 10000; else if (!$("#i-split").checked) delete S.rules.split[k2];
+      if ($("#i-dirrule").checked) S.rules.dir[k2] = dir; else delete S.rules.dir[k2];
+    }
     it.desc = desc || it.orig; if (details) it.details = details; else delete it.details; if (date) it.date = date;
     const k = norm(it.orig);
     if (k){
