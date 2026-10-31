@@ -565,7 +565,7 @@ async function amzMerge(ships){
 // Reads the text you get by selecting everything on Amazon's Your Orders page and copying it.
 function amzParseText(text){
   const lines = text.replace(/\r/g, "").split("\n").map(l => l.replace(/\s+/g, " ").trim()).filter(Boolean);
-  const STOP = /^(buy it again|view your item|view item|track package|return or replace items?|return items?|replace items?|write a (product )?review|leave seller feedback|view order details|order details|view invoice|invoice|archive order|get product support|get help with order|ask product question|share gift receipt|problem with order|cancel items?|view related transactions|see all|show more|sold by|return window|eligible for return|returned|refund|your package|package (was|is)|delivered|arriving|now arriving|expected|shipped|not yet shipped|it'?s on the way|out for delivery|auto-?delivered|subscribe|subscription|quantity|qty|condition|gift|ship to|order placed|total|order #|recipient|buy again|your orders|orders|search all orders|digital orders|cancelled orders|local store orders|amazon pay|not yet dispatched|dispatched|paid|price|deliver|leave a review|product support|you purchased|purchased|this item|change|apply|filter|past \d+|\d{4}$)/i;
+  const STOP = /^(ask alexa|view return|view refund|return\/refund status|your item has been|rate (and review|your)|add to cart|see item details|item details|order again|hide order|unhide order|manage|share|visit the|1-click|get it by|delivery by|buy it again|view your item|view item|track package|return or replace items?|return items?|replace items?|write a (product )?review|leave seller feedback|view order details|order details|view invoice|invoice|archive order|get product support|get help with order|ask product question|share gift receipt|problem with order|cancel items?|view related transactions|see all|show more|sold by|return window|eligible for return|returned|refund|your package|package (was|is)|delivered|arriving|now arriving|expected|shipped|not yet shipped|it'?s on the way|out for delivery|auto-?delivered|subscribe|subscription|quantity|qty|condition|gift|ship to|order placed|total|order #|recipient|buy again|your orders|orders|search all orders|digital orders|cancelled orders|local store orders|amazon pay|not yet dispatched|dispatched|paid|price|deliver|leave a review|product support|you purchased|purchased|this item|change|apply|filter|past \d+|\d{4}$)/i;
   const out = []; let cur = null, afterShipTo = false;
   const finish = () => { if (cur && cur.order && cur.date && cur.total > 0){ out.push({key: cur.order + "|" + cur.date, order: cur.order, date: cur.date, ship: cur.date, total: cur.total, items: cur.items, pasted: true}); } };
   for (let i = 0; i < lines.length; i++){
@@ -584,6 +584,22 @@ function amzParseText(text){
   }
   finish();
   return out;
+}
+// One-time cleanup of labels picked up from Amazon page buttons before they were filtered out.
+const AMZ_JUNK = /^(ask alexa[^,]*|view return[^,]*|view refund[^,]*|rate your[^,]*|add to cart|see item details)$/i;
+function amzScrub(){
+  if (S._amzScrubbed || !S.ready) return; S._amzScrubbed = true;
+  let shipsChanged = false;
+  for (const sh of amzShips()){ const before = sh.items.length; sh.items = sh.items.filter(n => !AMZ_JUNK.test(n.trim())); if (sh.items.length !== before) shipsChanged = true; }
+  const touched = new Set(); let inbox = false;
+  for (const c of amzCharges()){
+    const d = c.ref.details; if (!d) continue;
+    const parts = d.split(/,\s*(?=[A-Z])/), kept = parts.filter(p => !AMZ_JUNK.test(p.trim()));
+    if (kept.length !== parts.length){ const sh = c.ref.amz && amzFind(c.ref.amz); c.ref.details = sh ? amzLabel(sh) : kept.join(", "); if (!c.ref.details) delete c.ref.details; if (c.kind === "tx") touched.add(c.p); else inbox = true; }
+  }
+  if (shipsChanged) store.save("amazon", S.amazon);
+  touched.forEach(p => savePeriod(p)); if (inbox) saveInbox();
+  if (shipsChanged || touched.size || inbox) setTimeout(() => { render(); toast("Removed “Ask Alexa about this order” from your Amazon labels."); }, 0);
 }
 function amzPasteSheet(){
   openSheet(`<h2>Paste your Amazon orders</h2>
@@ -678,6 +694,7 @@ function searchResults(){
   </div>`).join("")}</div>`;
 }
 function viewSearch(){
+  amzScrub();
   const mode = S.qMode || "amazon";
   const chip = (k, l) => `<button data-act="q-mode" data-m="${k}" aria-pressed="${mode===k}">${l}</button>`;
   return `<div class="topbar"><h1 style="display:flex;align-items:center;gap:12px"><button class="iconbtn" data-tab="home" aria-label="Back to Paycheck">${ICONS.left}</button>Search</h1></div>
@@ -803,7 +820,7 @@ function fixWaitingDirections(){
   if (n){ setTimeout(() => { saveInbox(); toast(`${n} charge${n===1?" was":"s were"} showing as money in. Fixed.`); }, 0); }
 }
 function viewReview(){
-  fixWaitingDirections();
+  fixWaitingDirections(); amzScrub();
   const items = pending().sort((a,b) => b.date.localeCompare(a.date));
   const dups = S.inbox.items.filter(i => i.status === "dup");
   const multi = new Set(items.map(i => periodFor(i.date))).size > 1, latestP = periodList().slice(-1)[0];
