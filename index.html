@@ -874,6 +874,16 @@ function viewSettings(){
   const st = S.settings, pct = v => Math.round(v*10000)/100;
   const nRules = Object.keys(S.rules.map||{}).length;
   return `<div class="topbar"><h1>Settings</h1></div>
+  <div class="panel"><h2 style="margin-bottom:6px">Update the app</h2>
+    <p class="muted" style="margin:0 0 12px">Choose the Payday-app.zip you were given and it’s published to your site for you. No manual uploading.</p>
+    <label class="field"><span>GitHub repo</span><input class="input" id="gh-repo" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="yourname/payday" value="${esc(ghCfg().repo || ghGuessRepo())}"></label>
+    <label class="field"><span>GitHub token</span><input class="input" id="gh-token" type="password" autocapitalize="off" autocomplete="off" placeholder="Paste once, saved on this device only" value="${esc(ghCfg().token || "")}"></label>
+    <details style="margin:0 0 14px"><summary class="small muted">How to get a token (one time)</summary><ol class="small muted" style="margin:8px 0 0;padding-left:18px;line-height:1.6"><li>On GitHub: Settings > Developer settings > Personal access tokens > Fine-grained tokens > Generate new token.</li><li>Repository access: Only select repositories, then pick your Payday repo.</li><li>Permissions > Repository permissions > Contents: Read and write.</li><li>Generate, copy it, and paste it above. Anyone with this token can change that repo, so don’t share it.</li></ol></details>
+    <div class="row">
+      <label class="btn" style="display:inline-flex;align-items:center;cursor:pointer">Choose update zip<input type="file" id="updateIn" accept="*/*" style="position:absolute;width:1px;height:1px;opacity:0"></label>
+      <button class="btn ghost" data-act="gh-refresh">Refresh app</button>
+    </div>
+  </div>
   <div class="panel"><h2 style="margin-bottom:12px">How each paycheck is split</h2>
     <div class="grid2">
       <label class="field"><span>Personal %</span><input class="input num" id="s-personal" inputmode="decimal" value="${pct(st.personalPct)}"></label>
@@ -904,16 +914,6 @@ function viewSettings(){
     </div>
     <p class="small muted" style="margin:12px 0 0">A backup is one file. Keep a copy in Google Drive or email it to yourself. To move your data to another phone or computer, back up here and restore it there.</p>
     <div class="row" style="margin-top:12px"><button class="btn ghost" data-act="export">Export to spreadsheet (CSV)</button>${nRules?'<button class="btn ghost" data-act="clear-rules">Forget learned merchants</button>':""}</div>
-  </div>
-  <div class="panel"><h2 style="margin-bottom:6px">Update the app</h2>
-    <p class="muted" style="margin:0 0 12px">Choose the Payday-app.zip you were given and it’s published to your site for you. No manual uploading.</p>
-    <label class="field"><span>GitHub repo</span><input class="input" id="gh-repo" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="yourname/payday" value="${esc(ghCfg().repo || ghGuessRepo())}"></label>
-    <label class="field"><span>GitHub token</span><input class="input" id="gh-token" type="password" autocapitalize="off" autocomplete="off" placeholder="Paste once, saved on this device only" value="${esc(ghCfg().token || "")}"></label>
-    <details style="margin:0 0 14px"><summary class="small muted">How to get a token (one time)</summary><ol class="small muted" style="margin:8px 0 0;padding-left:18px;line-height:1.6"><li>On GitHub: Settings > Developer settings > Personal access tokens > Fine-grained tokens > Generate new token.</li><li>Repository access: Only select repositories, then pick your Payday repo.</li><li>Permissions > Repository permissions > Contents: Read and write.</li><li>Generate, copy it, and paste it above. Anyone with this token can change that repo, so don’t share it.</li></ol></details>
-    <div class="row">
-      <label class="btn" style="display:inline-flex;align-items:center;cursor:pointer">Choose update zip<input type="file" id="updateIn" accept="*/*" style="position:absolute;width:1px;height:1px;opacity:0"></label>
-      <button class="btn ghost" data-act="gh-refresh">Refresh app</button>
-    </div>
   </div>
   <div class="panel"><h2 style="margin-bottom:6px">Appearance</h2>
     <div class="seg">${[["auto","Match phone"],["light","Light"],["dark","Dark"]].map(([k,l]) => `<button data-act="theme" data-t="${k}" aria-pressed="${(document.documentElement.dataset.theme||"auto")===k}">${l}</button>`).join("")}</div>
