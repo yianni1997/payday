@@ -108,6 +108,11 @@ main{max-width:760px;margin:0 auto;padding:16px 16px calc(96px + env(safe-area-i
 .fund .amt{text-align:right;font-family:var(--display);font-weight:700;font-size:18px}
 .fund .amt small{display:block;font-family:var(--body);font-weight:400;font-size:12px;color:var(--muted)}
 .fund.clickable:hover{background:var(--sunk)}
+.goals{margin-top:14px;background:var(--surface);border-radius:16px;border:1px solid var(--line);padding:14px}
+.goal{padding:10px 0;border-top:1px solid var(--line)}
+.goal:first-of-type{border-top:0}
+.goal .bar{height:8px;border-radius:4px;background:var(--sunk);overflow:hidden;margin:6px 0 4px}
+.goal .bar i{display:block;height:100%;background:var(--savings);border-radius:4px}
 .fund .mini{grid-column:2/4;height:4px;border-radius:2px;background:var(--sunk);margin-top:8px;overflow:hidden}
 .fund .mini i{display:block;height:100%}
 .fund.clickable{cursor:pointer}
@@ -797,6 +802,7 @@ function viewHome(){
         ${fundRow("Debt", "var(--debt)", money(c.debtSpent) + "<small>paid</small>", `Up to ${money(c.debtBudget)} if needed`, c.debtBudget ? c.debtSpent/c.debtBudget : 0)}
         ${fundRow("Extra income", "var(--income)", money(c.extra), c.extra ? `${Math.round(S.settings.extraSavingsPct*100)}% goes to savings` : "Side jobs, sales, gifts", null)}
       </div>
+      ${goalsCard()}
     </div>
     <div class="col-right">
       <div class="section-h"><h2>Transactions</h2>${S.sel?"":`<span class="small muted num">${txns.length} item${txns.length===1?"":"s"}${txns.length?` <button class="btn ghost sm" data-act="tx-select" style="margin-left:8px">Select</button>`:""}</span>`}</div>
@@ -1386,6 +1392,63 @@ function fundSheet(f){
       : `<div class="list" style="margin-top:8px"><div class="empty">Nothing in ${esc(names[f])} for this paycheck yet.</div></div>`}
     <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn ghost" data-act="close">Close</button></div>`);
 }
+/* ---------- savings goals ---------- */
+// Your savings fill your goals in order: the first goal fills up, then the next one starts.
+function goalsList(){ return (S.settings.goals || []).filter(g => g && g.name && +g.target > 0); }
+function savingsMovedSince(date){
+  let t = 0;
+  for (const p of periodList()) for (const x of (S.periods[p].txns || [])) if (x.fund === "savings" && (!date || x.date > date)) t += +x.amount || 0;
+  return r2(t);
+}
+function savingsPool(){
+  const b = S.settings.savBal;
+  if (b && typeof b.amount === "number") return r2(b.amount + savingsMovedSince(b.date));
+  const start = savingsStart(); let t = 0;
+  for (const p of periodList()) if (start && p >= start) t += calc(p).savingsMoved;
+  return r2(t);
+}
+function savingsPace(){
+  // Average moved per paycheck over your last 4 tracked paychecks; until there's history, what each paycheck owes.
+  const start = savingsStart(), per = periodList().filter(p => start && p >= start);
+  const done = per.slice(0, -1).slice(-4).map(p => calc(p).savingsMoved).filter(v => v > 0);
+  if (done.length) return {amt: r2(done.reduce((a,b) => a + b, 0) / done.length), from: "moved"};
+  const last = per[per.length - 1] || periodList().slice(-1)[0];
+  return {amt: last ? r2(calc(last).savings) : 0, from: "planned"};
+}
+function goalProgress(){
+  let pool = savingsPool(), need = 0;
+  const pace = savingsPace();
+  return goalsList().map(g => {
+    const target = +g.target, saved = Math.max(0, Math.min(target, pool)); pool = r2(pool - saved);
+    need = r2(need + target - saved);
+    let eta = null;
+    if (saved < target && pace.amt > 0){ const paychecks = Math.ceil(need / pace.amt); const d = toD(todayIso()); d.setDate(d.getDate() + paychecks * 14); eta = d; }
+    return {...g, target, saved: r2(saved), eta, pace};
+  });
+}
+function goalsCard(){
+  const gs = goalProgress();
+  if (!gs.length) return `<div class="goals"><div class="row" style="justify-content:space-between"><div><b>Savings goals</b><div class="small muted">Set a target and see when you’ll reach it.</div></div><button class="btn ghost sm" data-act="goals-edit">Add a goal</button></div></div>`;
+  return `<div class="goals"><div class="row" style="justify-content:space-between;margin-bottom:4px"><b>Savings goals</b><button class="btn ghost sm" data-act="goals-edit" style="min-height:32px;padding:4px 12px">Edit</button></div>
+    ${gs.map(g => { const pct = Math.min(100, g.saved / g.target * 100), done = g.saved >= g.target - 0.004;
+      return `<div class="goal"><div class="row" style="justify-content:space-between;flex-wrap:nowrap"><b style="min-width:0;overflow-wrap:anywhere">${esc(g.name)}</b><span class="num small"><b>${money0(g.saved)}</b> of ${money0(g.target)}</span></div>
+        <div class="bar"><i style="width:${pct}%"></i></div>
+        <div class="small muted">${done ? "Reached. New savings go to the next goal." : g.eta ? `About ${esc(g.eta.toLocaleDateString("en-US", {month:"short", year:"numeric"}))} at ${money0(g.pace.amt)} per paycheck` : "Starts filling when you move money to savings"}${!done && g.eta && g.pace.from === "planned" ? " (what each paycheck owes)" : ""}</div></div>`; }).join("")}
+  </div>`;
+}
+function goalsSheet(){
+  const gs = (S.settings.goals || []).length ? S.settings.goals : [{id: uid(), name: "", target: ""}];
+  const row = (g, i) => `<div class="goal-row" data-gid="${esc(g.id)}" style="display:grid;grid-template-columns:1fr 120px auto;gap:8px;align-items:center;margin-bottom:8px">
+      <input class="input" data-g="name" value="${esc(g.name || "")}" placeholder="Goal, e.g. Emergency fund" aria-label="Goal name">
+      <input class="input num" data-g="target" inputmode="decimal" value="${g.target || ""}" placeholder="$ target" aria-label="Target amount">
+      <span class="row" style="gap:4px;flex-wrap:nowrap"><button type="button" class="iconbtn" data-gmove="-1" aria-label="Move up" ${i===0?"disabled":""} style="width:34px;height:34px">↑</button><button type="button" class="iconbtn" data-gdel aria-label="Remove goal" style="width:34px;height:34px">✕</button></span>
+    </div>`;
+  openSheet(`<h2>Savings goals</h2>
+    <label class="field"><span>What’s in your savings right now?</span><input class="input num" id="g-bal" inputmode="decimal" value="${savingsPool().toFixed(2)}"><small>Your PayPal Savings balance. After this, everything you mark as moved to savings is added on top. Update it any time, like after interest or a withdrawal.</small></label>
+    <div class="field"><span>Goals, filled in this order</span><div id="g-rows">${gs.map(row).join("")}</div>
+      <button type="button" class="btn ghost sm" data-gadd>Add another goal</button></div>
+    <div class="row" style="justify-content:flex-end;margin-top:6px"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="goals-save">Save</button></div>`);
+}
 /* ---------- actions ---------- */
 function findTx(id){ for (const p of periodList()){ const t = (S.periods[p].txns||[]).find(x => x.id === id); if (t) return {p, t}; } return null; }
 function savePeriod(p){ return store.save("p-" + p, S.periods[p]); }
@@ -1947,6 +2010,9 @@ document.addEventListener("click", async e => {
   const tab = e.target.closest("[data-tab]");
   if (tab){ closeSheet(); go(tab.dataset.tab); return; }
   if (S.rsel && S.view === "review"){ const art = e.target.closest("article.rv"); if (art && !e.target.closest("button,input,select,a,label")){ const cb = art.querySelector("[data-rsel]"); if (cb){ cb.checked = !cb.checked; cb.dispatchEvent(new Event("change", {bubbles:true})); return; } } }
+  if (e.target.closest("[data-gadd]")){ const box = $("#g-rows"); const div = document.createElement("div"); box.insertAdjacentHTML("beforeend", `<div class="goal-row" data-gid="${uid()}" style="display:grid;grid-template-columns:1fr 120px auto;gap:8px;align-items:center;margin-bottom:8px"><input class="input" data-g="name" placeholder="Goal, e.g. Car fund" aria-label="Goal name"><input class="input num" data-g="target" inputmode="decimal" placeholder="$ target" aria-label="Target amount"><span class="row" style="gap:4px;flex-wrap:nowrap"><button type="button" class="iconbtn" data-gmove="-1" aria-label="Move up" style="width:34px;height:34px">↑</button><button type="button" class="iconbtn" data-gdel aria-label="Remove goal" style="width:34px;height:34px">✕</button></span></div>`); box.lastElementChild.querySelector("input").focus(); return; }
+  if (e.target.closest("[data-gdel]")){ e.target.closest(".goal-row").remove(); return; }
+  if (e.target.closest("[data-gmove]")){ const r = e.target.closest(".goal-row"); if (r.previousElementSibling) r.parentElement.insertBefore(r, r.previousElementSibling); return; }
   const pd = e.target.closest("[data-pickd]");
   if (pd){ pd.parentElement.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b === pd)); return; }
   const sh = e.target.closest("[data-share]");
@@ -2049,6 +2115,16 @@ document.addEventListener("click", async e => {
   else if (a === "imp-add"){ const r = S.imports.find(x => x.id === id); if (r) addImport(r); }
   else if (a === "range"){ S.range = el.dataset.r; render(); }
   else if (a === "save-moved") movedSheet();
+  else if (a === "goals-edit") goalsSheet();
+  else if (a === "goals-save"){
+    const goals = [...document.querySelectorAll("#g-rows .goal-row")].map(r => ({id: r.dataset.gid, name: r.querySelector('[data-g=name]').value.trim(), target: r2(Math.abs(parseAmt(r.querySelector('[data-g=target]').value)))})).filter(g => g.name || g.target);
+    if (goals.some(g => !g.name || !(g.target > 0))){ toast("Give each goal a name and a target amount."); return; }
+    const bal = r2(parseAmt($("#g-bal").value));
+    S.settings.goals = goals;
+    if (!isNaN(bal) && Math.abs(bal - savingsPool()) > 0.004) S.settings.savBal = {amount: Math.max(0, bal), date: todayIso()};
+    else if (!S.settings.savBal && !isNaN(bal)) S.settings.savBal = {amount: Math.max(0, bal), date: todayIso()};
+    store.save("settings", S.settings); closeSheet(); render(); toast(goals.length ? "Goals saved." : "Goals removed.");
+  }
   else if (a === "fund-list"){ if (el.dataset.f) fundSheet(el.dataset.f); }
   else if (a === "fund-review"){ closeSheet(); go("review"); }
   else if (a === "open-search"){ S.qMode = S.qMode || "amazon"; go("search"); }
