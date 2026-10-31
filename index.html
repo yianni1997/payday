@@ -113,6 +113,10 @@ main{max-width:760px;margin:0 auto;padding:16px 16px calc(96px + env(safe-area-i
 .goal:first-of-type{border-top:0}
 .goal .bar{height:8px;border-radius:4px;background:var(--sunk);overflow:hidden;margin:6px 0 4px}
 .goal .bar i{display:block;height:100%;background:var(--savings);border-radius:4px}
+.ver{display:block;margin:28px auto 0;background:none;border:0;color:var(--muted);font-size:12px;cursor:pointer;padding:6px 10px}
+.ver:hover{color:var(--ink)}
+nav.tabs .navver{display:none}
+@media (min-width:900px){nav.tabs .navver{display:block;flex:0;margin-top:auto;padding:8px 12px;font-size:12px;color:var(--muted);background:none;border:0;text-align:left;cursor:pointer}}
 .fund .mini{grid-column:2/4;height:4px;border-radius:2px;background:var(--sunk);margin-top:8px;overflow:hidden}
 .fund .mini i{display:block;height:100%}
 .fund.clickable{cursor:pointer}
@@ -297,6 +301,21 @@ const SOURCES = {
   paypal_mc:"PayPal Mastercard", paypal:"PayPal activity", chase_bank:"Chase checking",
   chase_amazon:"Chase Amazon card", other:"Other", manual:"Added by hand", sheet:"Spreadsheet"
 };
+/* ---------- version ---------- */
+// Bump APP_VERSION (and the cache name in sw.js to match) with every update, and add a line to CHANGES.
+const APP_VERSION = 30, APP_DATE = "2026-10-31";
+const CHANGES = [
+  [30, "2026-10-31", "Version number shown at the bottom of every page. Tap it to see what changed."],
+  [29, "2026-10-31", "Your rules page, Undo after confirm or deny, Denied this paycheck, keyboard shortcuts in Review, spreadsheet-style .xlsx export."],
+  [28, "2026-10-31", "Savings goals."],
+  [27, "2026-10-31", "Tap a fund or the Personal box to see its charges."],
+  [26, "2026-10-31", "Leftover Personal money: half rolls into the next paycheck, half goes to savings."],
+  [25, "2026-10-31", "PayPal reloads from Chase left out on both ends."],
+  [23, "2026-10-31", "Pop-ups only close with ✕."],
+  [21, "2026-10-31", "Bulk select in Review."],
+  [20, "2026-10-31", "Paste Amazon orders from the Your Orders page."]
+];
+const verLabel = () => `Payday v${APP_VERSION}`;
 const DEFAULTS = {personalPct:0.439848378655353, savingsPct:0.459357998970976, debtPct:0.05, gasBudget:60, extraSavingsPct:0.548, extraGasPct:0.004, selfName:"Yianni Pantaratos", leftoverFrom:"2026-10-16", leftoverSavePct:0.5};
 
 const CATS = [
@@ -481,7 +500,7 @@ const TABS = [["home","Paycheck"],["review","Review"],["import","Import"],["acco
 function renderTabs(){
   const n = pending().length;
   $("#tabs").innerHTML = '<div class="brand">Payday</div>' + TABS.map(([k,l]) =>
-    `<button data-tab="${k}" ${S.view===k?'aria-current="page"':""}><span class="ico">${ICONS[k]}</span>${l}${k==="review"&&n?`<span class="badge num">${n>99?"99+":n}</span>`:""}</button>`).join("");
+    `<button data-tab="${k}" ${S.view===k?'aria-current="page"':""}><span class="ico">${ICONS[k]}</span>${l}${k==="review"&&n?`<span class="badge num">${n>99?"99+":n}</span>`:""}</button>`).join("") + `<button class="navver" data-act="whatsnew">${verLabel()}</button>`;
 }
 function render(){
   renderTabs();
@@ -496,6 +515,7 @@ function render(){
   else if (S.view === "search") m.innerHTML = viewSearch();
   else if (S.view === "rules") m.innerHTML = viewRules();
   else m.innerHTML = viewSettings();
+  m.insertAdjacentHTML("beforeend", `<button class="ver" data-act="whatsnew" aria-label="${verLabel()}, see what’s new">${verLabel()} • ${short(APP_DATE)}</button>`);
 }
 function go(view){ S.sel = null; S.rsel = null; S.view = view; render(); window.scrollTo(0,0); if (view === "accounts") plaidAutoLoad(); }
 
@@ -1478,6 +1498,10 @@ function goalsSheet(){
       <button type="button" class="btn ghost sm" data-gadd>Add another goal</button></div>
     <div class="row" style="justify-content:flex-end;margin-top:6px"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="goals-save">Save</button></div>`);
 }
+function whatsNewSheet(){
+  openSheet(`<h2>What’s new</h2><p class="muted" style="margin:-6px 0 12px">You’re on <b style="color:var(--ink)">${verLabel()}</b>, from ${esc(short(APP_DATE))}.</p>
+    <div class="list">${CHANGES.map(([v, d, note]) => `<div style="padding:12px 14px;border-top:1px solid var(--line)"><b>v${v}</b> <span class="small muted">${esc(short(d))}</span><div class="small" style="margin-top:2px">${esc(note)}</div></div>`).join("")}</div>`);
+}
 /* ---------- actions ---------- */
 function findTx(id){ for (const p of periodList()){ const t = (S.periods[p].txns||[]).find(x => x.id === id); if (t) return {p, t}; } return null; }
 function savePeriod(p){ return store.save("p-" + p, S.periods[p]); }
@@ -2271,6 +2295,7 @@ document.addEventListener("click", async e => {
   else if (a === "range"){ S.range = el.dataset.r; render(); }
   else if (a === "save-moved") movedSheet();
   else if (a === "goals-edit") goalsSheet();
+  else if (a === "whatsnew") whatsNewSheet();
   else if (a === "open-rules") go("rules");
   else if (a === "rule-del"){ ruleSet(el.dataset.t, el.dataset.k, null); render(); toast("Rule deleted."); }
   else if (a === "xlsx-open") xlsxSheet();
