@@ -288,7 +288,7 @@ const SOURCES = {
   paypal_mc:"PayPal Mastercard", paypal:"PayPal activity", chase_bank:"Chase checking",
   chase_amazon:"Chase Amazon card", other:"Other", manual:"Added by hand", sheet:"Spreadsheet"
 };
-const DEFAULTS = {personalPct:0.439848378655353, savingsPct:0.459357998970976, debtPct:0.05, gasBudget:60, extraSavingsPct:0.548, extraGasPct:0.004, selfName:"Yianni Pantaratos"};
+const DEFAULTS = {personalPct:0.439848378655353, savingsPct:0.459357998970976, debtPct:0.05, gasBudget:60, extraSavingsPct:0.548, extraGasPct:0.004, selfName:"Yianni Pantaratos", leftoverFrom:"2026-10-16", leftoverSavePct:0.5};
 
 const CATS = [
   ["Gas", /\b(shell|exxon|mobil|sunoco|speedway|citgo|valero|sheetz|getty|lukoil|circle k|fuel)\b/i],
@@ -396,25 +396,37 @@ function periodEnd(p){
 }
 // Overspending on Personal carries into the next paycheck (what the spreadsheet called "overdraft").
 // A period can pin its own carryIn; otherwise it is worked out from the paycheck before it.
-function autoCarry(p){
+// What last paycheck hands to this one.
+// Overspending: the whole amount carries in (you start behind).
+// Leftover (from the leftoverFrom paycheck on): part rolls into Personal money, the rest is added to savings to move.
+function fromPrev(p){
   const list = periodList(), i = list.indexOf(p);
-  if (i <= 0) return 0;
-  return Math.max(0, -calc(list[i-1]).personalLeft);
+  if (i <= 0) return {carry: 0, save: 0, leftover: 0};
+  const prev = list[i-1], left = calc(prev).personalLeft, st = S.settings;
+  if (left < 0) return {carry: r2(-left), save: 0, leftover: 0};
+  if (left > 0 && st.leftoverFrom && prev >= st.leftoverFrom){
+    const save = r2(left * (+st.leftoverSavePct || 0));
+    return {carry: -r2(left - save), save, leftover: r2(left)};
+  }
+  return {carry: 0, save: 0, leftover: 0};
 }
+function autoCarry(p){ return fromPrev(p).carry; }
 function calc(p){
   const per = S.periods[p], st = S.settings, tx = per.txns || [];
   const sum = f => r2(tx.filter(t => t.fund === f).reduce((a,t) => a + (+t.amount||0), 0));
   const pay = +per.amount || 0, extra = sum("income"), eg = +st.extraGasPct || 0;
   const personalBudget = r2(pay*st.personalPct + extra*(1 - st.extraSavingsPct - eg));
   const manual = typeof per.carryIn === "number";
-  const carry = r2(manual ? per.carryIn : autoCarry(p));
+  const fp = (!manual || (st.leftoverFrom && p > st.leftoverFrom)) ? fromPrev(p) : {carry: 0, save: 0, leftover: 0};
+  const carry = r2(manual ? per.carryIn : fp.carry);
+  const leftoverSave = manual ? 0 : fp.save;
   const gasBudget = r2(+st.gasBudget + extra*eg);
   const personalSpent = sum("personal"), gasSpent = sum("gas"), debtSpent = sum("debt");
   return {
-    pay, extra, carry, autoCarry: !manual, personalBudget, personalSpent, personalLeft: r2(personalBudget - carry - personalSpent),
+    pay, extra, carry, autoCarry: !manual, owedIn: carry > 0 ? carry : 0, rolledIn: carry < 0 ? -carry : 0, leftoverSave, prevLeftover: manual ? 0 : fp.leftover, personalBudget, personalSpent, personalLeft: r2(personalBudget - carry - personalSpent),
     gasBudget, gasSpent, gasLeft: r2(gasBudget - gasSpent),
     debtBudget: r2(pay*st.debtPct), debtSpent,
-    savings: r2(pay*st.savingsPct + extra*st.extraSavingsPct),
+    savings: r2(pay*st.savingsPct + extra*st.extraSavingsPct + leftoverSave),
     savingsBase: r2(pay*st.savingsPct), savingsExtra: r2(extra*st.extraSavingsPct), savingsMoved: sum("savings")
   };
 }
@@ -727,7 +739,8 @@ function viewHome(){
   const p = list[S.pIdx], per = S.periods[p], c = calc(p), end = periodEnd(p);
   const today = todayIso(), latest = S.pIdx === list.length - 1;
   const daysLeft = Math.max(0, Math.round((toD(end) - toD(today)) / 864e5) + 1);
-  const pct = c.personalBudget > 0 ? Math.min(100, Math.max(0, (c.personalSpent + c.carry) / c.personalBudget * 100)) : 0;
+  const avail = r2(c.personalBudget + c.rolledIn);
+  const pct = avail > 0 ? Math.min(100, Math.max(0, (c.personalSpent + c.owedIn) / avail * 100)) : 0;
   const nPend = pending().length;
   const nextPay = addDays(list[list.length-1], 14);
   const tot = Math.max(1, c.personalBudget + c.savings + c.gasBudget + c.debtBudget);
@@ -766,7 +779,7 @@ function viewHome(){
         <div class="lbl"><span>Personal money left</span><span class="num">${Math.round(pct)}% used</span></div>
         <div class="big num ${c.personalLeft<0?"over":""}">${money(c.personalLeft)}</div>
         <div class="meter"><i style="width:${pct}%"></i></div>
-        <div class="foot"><span class="num">${money(c.personalSpent)} spent${c.carry ? ` + ${money(c.carry)} carried over` : ""}</span><span class="num">of ${money(c.personalBudget)}</span></div>
+        <div class="foot"><span class="num">${money(c.personalSpent)} spent${c.owedIn ? ` + ${money(c.owedIn)} carried over` : ""}</span><span class="num">of ${money(avail)}</span></div>${c.rolledIn ? `<div class="small" style="margin-top:6px">Includes ${money(c.rolledIn)} left over from last paycheck${c.leftoverSave ? `. The other ${money(c.leftoverSave)} goes to savings` : ""}.</div>` : ""}
       </section>
       <div class="split" aria-label="How this paycheck is split">
         <div class="bar">${seg(c.personalBudget,"var(--personal)","Personal")}${seg(c.savings,"var(--savings)","Savings")}${seg(c.gasBudget,"var(--gas)","Gas")}${seg(c.debtBudget,"var(--debt)","Debt")}</div>
@@ -776,7 +789,7 @@ function viewHome(){
         ${(() => { const L = savingsLedger(p);
           if (!L) return fundRow("Savings", "var(--savings)", money(c.savings), c.extra ? `${money(c.savingsBase)} from pay + ${money(c.savingsExtra)} from extra` : `${Math.round(S.settings.savingsPct*1000)/10}% of your paycheck`, null);
           const due = r2(L.before + L.owed);
-          const sub = `${money(L.moved)} moved of ${money(due)}` + (L.before > 0.004 ? ` (${money(L.before)} carried over)` : L.before < -0.004 ? ` (${money(-L.before)} ahead from before)` : "") + (c.extra ? `. Includes ${money(c.savingsExtra)} from extra income` : "");
+          const sub = `${money(L.moved)} moved of ${money(due)}` + (L.before > 0.004 ? ` (${money(L.before)} carried over)` : L.before < -0.004 ? ` (${money(-L.before)} ahead from before)` : "") + (c.extra ? `. Includes ${money(c.savingsExtra)} from extra income` : "") + (c.leftoverSave ? `. Includes ${money(c.leftoverSave)}, half of last paycheck’s leftover` : "");
           return fundRow("Savings", "var(--savings)", L.left > 0.004 ? money(L.left) + "<small>still to move</small>" : "Done<small>" + (L.left < -0.004 ? money(-L.left) + " ahead" : "all moved") + "</small>", sub, due > 0 ? L.moved / due : 1);
         })()}
         ${fundRow("Gas", "var(--gas)", money(c.gasLeft) + "<small>left</small>", `${money(c.gasSpent)} of ${money(c.gasBudget)}`, c.gasBudget ? c.gasSpent/c.gasBudget : 0)}
@@ -978,6 +991,7 @@ function viewSettings(){
     <div class="grid2">
       <label class="field"><span>Extra income to savings %</span><input class="input num" id="s-extra" inputmode="decimal" value="${pct(st.extraSavingsPct)}"></label>
       <label class="field"><span>Extra income to gas %</span><input class="input num" id="s-extragas" inputmode="decimal" value="${pct(st.extraGasPct || 0)}"></label>
+      <label class="field" style="grid-column:1/-1"><span>Leftover Personal money: % sent to savings</span><input class="input num" id="s-leftsave" inputmode="decimal" value="${pct(st.leftoverSavePct || 0)}"><small>When a paycheck ends with Personal money left, this share is added to savings to move and the rest rolls into the next paycheck. Applies from the ${esc(short(st.leftoverFrom || "2026-10-16"))} paycheck on.</small></label>
       <label class="field" style="grid-column:1/-1"><span>Your name on PayPal</span><input class="input" id="s-selfname" value="${esc(st.selfName || "")}" placeholder="First Last"><small>Payments to this name (like sending to your savings PayPal) come in as Moved to savings.</small></label>
       <label class="field" style="grid-column:1/-1"><span>Track moving savings starting with</span><select class="input" id="s-savestart">${periodList().slice().reverse().map(p => `<option value="${p}" ${p===savingsStart()?"selected":""}>${short(p)} paycheck</option>`).join("")}</select><small>Savings you owe from this paycheck on must be marked as moved. Earlier paychecks are left alone.</small></label>
     </div>
@@ -1318,7 +1332,7 @@ function periodSheet(edit){
   openSheet(`<h2>${edit?"Edit paycheck":"New paycheck"}</h2>
     <label class="field"><span>Take-home amount on the paystub</span><input class="input bigamt num" id="p-amt" inputmode="decimal" value="${amt}" placeholder="$0.00"></label>
     <label class="field"><span>Paystub date</span><input class="input" type="date" id="p-date" value="${date}" ${edit?"disabled":""}></label>
-    ${edit ? (() => { const c = calc(p); return `<label class="field"><span>Overspending carried in from last paycheck</span><input class="input num" id="p-carry" inputmode="decimal" value="${c.carry}" placeholder="0.00"><small>${c.autoCarry ? "Worked out from last paycheck." : "Set by hand."} Lower it if you covered some of it another way. Clear it to have it worked out automatically.</small></label>`; })() : ""}
+    ${edit ? (() => { const c = calc(p); return `<label class="field"><span>${c.carry < 0 ? "Leftover rolled in from last paycheck" : "Overspending carried in from last paycheck"}</span><input class="input num" id="p-carry" inputmode="decimal" value="${Math.abs(c.carry)}" placeholder="0.00" data-sign="${c.carry < 0 ? -1 : 1}"><small>${c.autoCarry ? "Worked out from last paycheck." : "Set by hand."} ${c.carry < 0 ? "Change it if you used some of that leftover another way." : "Lower it if you covered some of it another way."} Clear it to have it worked out automatically.</small></label>`; })() : ""}
     <div class="row" style="justify-content:space-between">
       ${edit && !(S.periods[p].txns||[]).length && list.length>1 ? `<button class="btn danger" data-act="del-period">Delete paycheck</button>` : "<span></span>"}
       <div class="row"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="save-period" data-edit="${edit?1:0}">${edit?"Save":"Start paycheck"}</button></div>
@@ -1931,7 +1945,8 @@ document.addEventListener("click", async e => {
       const cv = $("#p-carry") ? $("#p-carry").value.trim() : "";
       if (cv === "") delete S.periods[p].carryIn;
       else {
-        const n = r2(parseAmt(cv)); if (isNaN(n) || n < 0){ toast("Use a number for the carried-over amount, like 108.49."); return; }
+        let n = r2(parseAmt(cv)); if (isNaN(n) || n < 0){ toast("Use a number for the carried-over amount, like 108.49."); return; }
+        n = r2(n * (+($("#p-carry").dataset.sign) || 1));
         const now = calc(p); if (!(now.autoCarry && Math.abs(n - now.carry) < 0.005)) S.periods[p].carryIn = n;
       }
       closeSheet(); render(); savePeriod(p); toast("Paycheck updated.");
@@ -2038,7 +2053,7 @@ document.addEventListener("click", async e => {
     const vals = {personalPct: g("#s-personal")/100, savingsPct: g("#s-savings")/100, gasBudget: g("#s-gas"), debtPct: g("#s-debt")/100, extraSavingsPct: g("#s-extra")/100, extraGasPct: g("#s-extragas")/100};
     if (Object.values(vals).some(v => isNaN(v) || v < 0)){ toast("Use numbers only, like 43.98."); return; }
     if (vals.extraSavingsPct + vals.extraGasPct > 1){ toast("Extra income to savings and gas can’t add up to more than 100%."); return; }
-    S.settings = {...S.settings, ...vals, ...(ss ? {savingsStart: ss} : {}), selfName: ($("#s-selfname") ? $("#s-selfname").value.trim() : S.settings.selfName), kind:"settings"}; store.save("settings", S.settings); render(); toast("Split saved. Every paycheck uses it.");
+    S.settings = {...S.settings, ...vals, ...(ss ? {savingsStart: ss} : {}), selfName: ($("#s-selfname") ? $("#s-selfname").value.trim() : S.settings.selfName), leftoverSavePct: $("#s-leftsave") ? Math.min(1, Math.max(0, (parseFloat($("#s-leftsave").value) || 0) / 100)) : S.settings.leftoverSavePct, kind:"settings"}; store.save("settings", S.settings); render(); toast("Split saved. Every paycheck uses it.");
   }
   else if (a === "export") exportCSV();
   else if (a === "edit-item"){ const it = S.inbox.items.find(i => i.id === id); if (it) itemSheet(it); }
