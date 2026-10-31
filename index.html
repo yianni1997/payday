@@ -273,6 +273,7 @@ const FUNDS = {
   gas:{label:"Gas", color:"var(--gas)"},
   debt:{label:"Debt", color:"var(--debt)"},
   income:{label:"Extra income", color:"var(--income)"},
+  savings:{label:"Moved to savings", color:"var(--savings)"},
   paycheck:{label:"Paycheck", color:"var(--savings)"},
   skip:{label:"Skip", color:"var(--line)"}
 };
@@ -300,6 +301,7 @@ function category(t){
   if (t.cat) return t.cat;
   if (t.fund === "gas") return "Gas";
   if (t.fund === "income") return "Extra income";
+  if (t.fund === "savings") return "Moved to savings";
   if (t.fund === "debt") return "Debt";
   for (const [name, re] of CATS) if (re.test(t.desc)) return name;
   return "Other";
@@ -405,7 +407,7 @@ function calc(p){
     gasBudget, gasSpent, gasLeft: r2(gasBudget - gasSpent),
     debtBudget: r2(pay*st.debtPct), debtSpent,
     savings: r2(pay*st.savingsPct + extra*st.extraSavingsPct),
-    savingsBase: r2(pay*st.savingsPct), savingsExtra: r2(extra*st.extraSavingsPct)
+    savingsBase: r2(pay*st.savingsPct), savingsExtra: r2(extra*st.extraSavingsPct), savingsMoved: sum("savings")
   };
 }
 // Review only deals with the current (latest) paycheck. A new paycheck deposit can still come through so the next one can be started.
@@ -413,6 +415,28 @@ function curRange(){ const l = periodList(); if (!l.length) return null; const p
 function inCur(it){ const r = curRange(); return !r || (it.date >= r[0] && it.date <= r[1]) || ((it.isPay || it.fund === "paycheck") && it.date >= r[0]); }
 function pending(){ return S.inbox.items.filter(i => i.status === "pending"); }
 
+/* ---------- savings: what you owe vs. what you actually moved ---------- */
+function pinSavingsStart(){
+  const per = periodList();
+  if (!S.settings.savingsStart && per.length && S.ready){ S.settings.savingsStart = per[per.length-1]; setTimeout(() => store.save("settings", S.settings), 0); }
+}
+function savingsStart(){
+  pinSavingsStart();
+  const per = periodList(); if (!per.length) return null;
+  return S.settings.savingsStart && per.includes(S.settings.savingsStart) ? S.settings.savingsStart : (S.settings.savingsStart && S.settings.savingsStart <= per[per.length-1] ? per.find(p => p >= S.settings.savingsStart) : per[per.length-1]);
+}
+function savingsLedger(upTo){
+  const start = savingsStart(); if (!start || upTo < start) return null;
+  let before = 0, owed = 0, moved = 0;
+  for (const p of periodList()){
+    if (p < start || p > upTo) continue;
+    const c = calc(p);
+    if (p === upTo){ owed = c.savings; moved = c.savingsMoved; }
+    else before += c.savings - c.savingsMoved;
+  }
+  before = r2(before);
+  return {before, owed: r2(owed), moved: r2(moved), left: r2(before + owed - moved)};
+}
 /* ---------- rendering ---------- */
 const ICONS = {
   home:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M7 15h4"/></svg>',
@@ -466,6 +490,8 @@ function viewHome(){
   const seg = (v, col, t) => `<span style="flex:${Math.max(v,0)/tot};background:${col}" title="${t}"></span>`;
 
   const banners = [];
+  { const L = latest ? savingsLedger(p) : null;
+    if (L && L.left > 0.004) banners.push(`<button class="banner" data-act="save-moved" style="border-color:var(--savings)"><span class="dot" style="background:var(--savings)"></span><span><b>Move ${money(L.left)} to savings</b><span class="small muted">${L.before > 0.004 ? `${money(L.before)} left over from before + ` : ""}${money(r2(L.owed - L.moved))} from this paycheck. Tap when it’s moved.</span></span><span class="go">I moved it</span></button>`); }
   if (nPend) banners.push(`<button class="banner" data-tab="review"><span class="dot" style="background:var(--debt)"></span><span><b>${nPend} charge${nPend>1?"s":""} waiting for review</b><span class="small muted">From your imported statements</span></span><span class="go">Review</span></button>`);
   const lb = lastBackup();
   if (!(FB.user && driveOn()) && (!lb || Math.round((toD(today) - toD(lb)) / 864e5) >= 14)) banners.push(`<button class="banner" data-act="backup"><span class="dot" style="background:var(--gas)"></span><span><b>${lb ? "Time for a backup" : "Back up your data"}</b><span class="small muted">${lb ? "Last one was " + short(lb) : "Everything is saved only on this device"}</span></span><span class="go">Back up</span></button>`);
@@ -475,7 +501,7 @@ function viewHome(){
   const byDay = {};
   txns.forEach(t => (byDay[t.date] = byDay[t.date] || []).push(t));
   const txHtml = txns.length ? Object.keys(byDay).sort().reverse().map(d => {
-    const dayTotal = byDay[d].filter(t => t.fund!=="income").reduce((a,t)=>a+(+t.amount||0),0);
+    const dayTotal = byDay[d].filter(t => t.fund!=="income" && t.fund!=="savings").reduce((a,t)=>a+(+t.amount||0),0);
     return `<div class="day"><div class="dh"><span>${esc(longDay(d))}</span><span class="num">${dayTotal?money(dayTotal):""}</span></div><div class="list">${byDay[d].map(txRow).join("")}</div></div>`;
   }).join("") : `<div class="list"><div class="empty"><h3>Nothing spent yet</h3>Tap + to add a charge, or import a statement.</div></div>`;
 
@@ -503,7 +529,12 @@ function viewHome(){
         <div class="legend"><span>Paycheck <b class="num" style="color:var(--ink)">${money(c.pay)}</b>${c.extra?` + <b class="num" style="color:var(--ink)">${money(c.extra)}</b> extra`:""}</span><button class="btn ghost sm" data-act="edit-pay" style="min-height:30px;padding:3px 10px">Edit</button></div>
       </div>
       <div class="funds">
-        ${fundRow("Savings", "var(--savings)", money(c.savings), c.extra ? `${money(c.savingsBase)} from pay + ${money(c.savingsExtra)} from extra` : `${Math.round(S.settings.savingsPct*1000)/10}% of your paycheck`, null)}
+        ${(() => { const L = savingsLedger(p);
+          if (!L) return fundRow("Savings", "var(--savings)", money(c.savings), c.extra ? `${money(c.savingsBase)} from pay + ${money(c.savingsExtra)} from extra` : `${Math.round(S.settings.savingsPct*1000)/10}% of your paycheck`, null);
+          const due = r2(L.before + L.owed);
+          const sub = `${money(L.moved)} moved of ${money(due)}` + (L.before > 0.004 ? ` (${money(L.before)} carried over)` : L.before < -0.004 ? ` (${money(-L.before)} ahead from before)` : "") + (c.extra ? `. Includes ${money(c.savingsExtra)} from extra income` : "");
+          return fundRow("Savings", "var(--savings)", L.left > 0.004 ? money(L.left) + "<small>still to move</small>" : "Done<small>" + (L.left < -0.004 ? money(-L.left) + " ahead" : "all moved") + "</small>", sub, due > 0 ? L.moved / due : 1);
+        })()}
         ${fundRow("Gas", "var(--gas)", money(c.gasLeft) + "<small>left</small>", `${money(c.gasSpent)} of ${money(c.gasBudget)}`, c.gasBudget ? c.gasSpent/c.gasBudget : 0)}
         ${fundRow("Debt", "var(--debt)", money(c.debtSpent) + "<small>paid</small>", `Up to ${money(c.debtBudget)} if needed`, c.debtBudget ? c.debtSpent/c.debtBudget : 0)}
         ${fundRow("Extra income", "var(--income)", money(c.extra), c.extra ? `${Math.round(S.settings.extraSavingsPct*100)}% goes to savings` : "Side jobs, sales, gifts", null)}
@@ -529,11 +560,13 @@ function txRow(t){
 
 /* ---------- review ---------- */
 function fundSeg(it){
-  const opts = it.flow > 0 ? ["income","paycheck","personal","skip"] : ["personal","gas","debt","skip"];
+  const opts = it.flow > 0 ? ["income","paycheck","personal","skip"] : ["personal","gas","debt","savings","skip"];
   return `<div class="seg" role="group" aria-label="Where this goes">${opts.map(f => `<button data-act="pick" data-id="${esc(it.id)}" data-fund="${f}" aria-pressed="${it.fund===f}"><span class="sw" style="background:${FUNDS[f].color}"></span>${f==="personal"&&it.flow>0?"Refund":FUNDS[f].label}</button>`).join("")}</div>`;
 }
 function fixWaitingDirections(){
   let n = 0;
+  const bills = S.inbox.items.filter(it => it.status === "pending" && isCardPayment(it));
+  if (bills.length){ S.inbox.items = S.inbox.items.filter(it => !bills.includes(it)); setTimeout(() => { saveInbox(); toast(`Left out ${bills.length} card bill payment${bills.length===1?"":"s"}. Those charges are already counted one by one.`); }, 0); }
   for (const it of S.inbox.items) if (it.status === "pending" && !it.dirChecked){
     it.dirChecked = true;
     if (it.bank === undefined) it.bank = it.flow;
@@ -680,6 +713,7 @@ function viewSettings(){
     <div class="grid2">
       <label class="field"><span>Extra income to savings %</span><input class="input num" id="s-extra" inputmode="decimal" value="${pct(st.extraSavingsPct)}"></label>
       <label class="field"><span>Extra income to gas %</span><input class="input num" id="s-extragas" inputmode="decimal" value="${pct(st.extraGasPct || 0)}"></label>
+      <label class="field" style="grid-column:1/-1"><span>Track moving savings starting with</span><select class="input" id="s-savestart">${periodList().slice().reverse().map(p => `<option value="${p}" ${p===savingsStart()?"selected":""}>${short(p)} paycheck</option>`).join("")}</select><small>Savings you owe from this paycheck on must be marked as moved. Earlier paychecks are left alone.</small></label>
     </div>
     <p class="small muted" style="margin:-4px 0 14px">The rest of extra income (${pct(1 - st.extraSavingsPct - (st.extraGasPct || 0))}%) goes to Personal money.</p>
     <button class="btn" data-act="save-settings">Save split</button>
@@ -1014,7 +1048,7 @@ function txSheet(t){
     <label class="field"><span>What was it?</span><input class="input" id="t-desc" value="${esc(t.desc)}" placeholder="Where it was charged"></label>
     <label class="field"><span>Details</span><input class="input" id="t-details" value="${esc(t.details||"")}" placeholder="What it was for, who it was with…"></label>
     <label class="field"><span>Date</span><input class="input" type="date" id="t-date" value="${t.date}"></label>
-    <div class="field"><span>Which fund</span>${fundPicker(t.fund, ["personal","gas","debt","income"])}</div>
+    <div class="field"><span>Which fund</span>${fundPicker(t.fund, ["personal","gas","debt","income","savings"])}</div>
     <div class="row" style="justify-content:space-between;margin-top:6px">
       ${isNew?'<span></span>':`<button class="btn danger" data-act="del-tx" data-id="${esc(t.id)}">Delete</button>`}
       <div class="row"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="save-tx" data-id="${esc(t.id)}">${isNew?"Add":"Save"}</button></div>
@@ -1050,11 +1084,26 @@ function itemSheet(it){
     <p class="small muted" style="margin:-6px 0 14px">Bank shows: ${esc(orig)}</p>
     <div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="save-item" data-id="${esc(it.id)}">Save</button></div>`);
 }
+function movedSheet(){
+  const per = periodList(), L = savingsLedger(per[per.length-1]);
+  openSheet(`<h2>Moved to savings</h2>
+    <label class="field"><span>How much did you move?</span><input class="input bigamt num" id="m-amt" inputmode="decimal" value="${L && L.left > 0 ? L.left.toFixed(2) : ""}" placeholder="$0.00"></label>
+    <label class="field"><span>Date</span><input class="input" type="date" id="m-date" value="${todayIso()}"></label>
+    <label class="field"><span>Details</span><input class="input" id="m-note" placeholder="e.g. PayPal to savings PayPal"></label>
+    <p class="small muted" style="margin:-4px 0 14px">If the transfer also comes in from a bank pull, pick <b>Moved to savings</b> on it in Review instead, so it isn’t counted twice. Payday learns it and pre-picks it next time.</p>
+    <div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="save-moved-ok">Save</button></div>`);
+}
 /* ---------- actions ---------- */
 function findTx(id){ for (const p of periodList()){ const t = (S.periods[p].txns||[]).find(x => x.id === id); if (t) return {p, t}; } return null; }
 function savePeriod(p){ return store.save("p-" + p, S.periods[p]); }
 function saveInbox(){ if (S.inbox.seen.length > 4000) S.inbox.seen = S.inbox.seen.slice(-4000); return store.save("inbox", S.inbox); }
-function learn(it){ const k = norm(it.orig || it.desc); if (!k || it.fund === "paycheck") return; if (S.rules.map[k] !== it.fund){ S.rules.map[k] = it.fund; S.rules._dirty = true; } }
+const normFull = d => String(d || "").toLowerCase().replace(/[^a-z0-9@. ]/g, " ").replace(/\s+/g, " ").trim();
+function learn(it){
+  const full = normFull(it.orig || it.desc);
+  S.rules.save = S.rules.save || {};
+  if (it.fund === "savings"){ if (!S.rules.save[full]){ S.rules.save[full] = true; S.rules._dirty = true; } return; }
+  if (S.rules.save[full]){ delete S.rules.save[full]; S.rules._dirty = true; }
+  const k = norm(it.orig || it.desc); if (!k || it.fund === "paycheck") return; if (S.rules.map[k] !== it.fund){ S.rules.map[k] = it.fund; S.rules._dirty = true; } }
 function saveRules(){ if (S.rules._dirty){ delete S.rules._dirty; store.save("rules", S.rules); } }
 function txFromItem(it){ const t = {id: uid(), date: it.date, desc: it.desc, fund: it.fund, amount: it.fund === "income" ? r2(it.flow) : r2(-it.flow), src: it.src}; if (it.details) t.details = it.details; return t; }
 
@@ -1302,9 +1351,13 @@ function isCardPayment(it){
   // Paying off a card isn't spending: on the card it shows as a credit, at Chase checking as a debit to the card company.
   if (it.flow > 0 && CARD_SRC.includes(it.src) && CARD_PAY_RE.test(it.desc) && !/refund|return/i.test(it.desc)) return true;
   if (it.flow < 0 && it.src === "chase_bank" && TRANSFER_RE.test(it.desc)) return true;
+  // Paying a card bill from PayPal or anywhere else: the card's own charges are already counted one by one.
+  if (it.flow < 0 && CARD_BILL_RE.test(it.orig || it.desc) && !/money transfer from|cash ?back reward|refund/i.test(it.orig || it.desc)) return true;
   return false;
 }
+const CARD_BILL_RE = /paypal cashback mastercard|paypal cash back mastercard|paypal mastercard|paypal credit card|synchrony|syncb|chase card services|chase credit crd|payment to chase card|amazon (prime )?(store )?card|credit card (bill|payment)|card payment|epay/i;
 function suggest(it){
+  if (it.flow < 0 && ((S.rules.save || {})[normFull(it.orig || it.desc)] || /(to|into) .*savings|savings (deposit|transfer)|transfer to savings/i.test(it.orig || it.desc))) return "savings";
   const k = norm(it.orig || it.desc);
   if (k && S.rules.map[k]){ const f = S.rules.map[k]; if ((it.flow > 0) === ["income","paycheck"].includes(f) || f === "skip" || (f === "personal")) return f; }
   if (it.flow > 0 && PAYCHECK_RE.test(it.desc)) return "paycheck";
@@ -1667,12 +1720,22 @@ document.addEventListener("click", async e => {
   else if (a === "imp-remove"){ S.imports = S.imports.filter(x => x.id !== id); render(); }
   else if (a === "imp-add"){ const r = S.imports.find(x => x.id === id); if (r) addImport(r); }
   else if (a === "range"){ S.range = el.dataset.r; render(); }
+  else if (a === "save-moved") movedSheet();
+  else if (a === "save-moved-ok"){
+    const amt = r2(Math.abs(parseAmt($("#m-amt").value))), date = $("#m-date").value, note = $("#m-note").value.trim();
+    if (!(amt > 0)){ toast("Enter how much you moved."); return; }
+    const p = periodFor(date || todayIso()); if (!p){ toast("Add a paycheck first."); return; }
+    const t = {id: uid(), date: date || todayIso(), desc: "Moved to savings", amount: amt, fund: "savings", src: "manual"}; if (note) t.details = note;
+    (S.periods[p].txns = S.periods[p].txns || []).push(t);
+    closeSheet(); render(); await savePeriod(p); toast(`${money(amt)} counted as moved to savings.`);
+  }
   else if (a === "save-settings"){
     const g = sel => parseFloat($(sel).value);
+    const ss = $("#s-savestart") ? $("#s-savestart").value : null;
     const vals = {personalPct: g("#s-personal")/100, savingsPct: g("#s-savings")/100, gasBudget: g("#s-gas"), debtPct: g("#s-debt")/100, extraSavingsPct: g("#s-extra")/100, extraGasPct: g("#s-extragas")/100};
     if (Object.values(vals).some(v => isNaN(v) || v < 0)){ toast("Use numbers only, like 43.98."); return; }
     if (vals.extraSavingsPct + vals.extraGasPct > 1){ toast("Extra income to savings and gas can’t add up to more than 100%."); return; }
-    S.settings = {...S.settings, ...vals, kind:"settings"}; store.save("settings", S.settings); render(); toast("Split saved. Every paycheck uses it.");
+    S.settings = {...S.settings, ...vals, ...(ss ? {savingsStart: ss} : {}), kind:"settings"}; store.save("settings", S.settings); render(); toast("Split saved. Every paycheck uses it.");
   }
   else if (a === "export") exportCSV();
   else if (a === "edit-item"){ const it = S.inbox.items.find(i => i.id === id); if (it) itemSheet(it); }
