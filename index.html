@@ -315,8 +315,9 @@ const SOURCES = {
 };
 /* ---------- version ---------- */
 // Bump APP_VERSION (and the cache name in sw.js to match) with every update, and add a line to CHANGES.
-const APP_VERSION = 33, APP_DATE = "2026-11-01";
+const APP_VERSION = 34, APP_DATE = "2026-11-01";
 const CHANGES = [
+  [34, "2026-11-01", "Close out a paycheck, match a statement (with monthly reminders), health check, faster manual adds, saved searches."],
   [33, "2026-11-01", "Test update: installed by sharing the zip straight to Payday."],
   [32, "2026-11-01", "Bulk edit confirmed charges, your own categories, search filters, Year in review, share the update zip straight to Payday."],
   [31, "2026-10-31", "Repeats grouped in Review, merchant view, change history with undo, check merges, paycheck notes, compact Review on PC."],
@@ -422,6 +423,7 @@ function applyDocs(docs){
   S.rules = docs.rules ? {map:{}, ...clone(docs.rules)} : {map:{}};
   S.amazon = docs.amazon ? {ships:[], ...clone(docs.amazon)} : {ships:[]};
   S.hist = docs.history ? {entries:[], ...clone(docs.history)} : {entries:[]};
+  S.recon = docs.recon ? {matches:[], ...clone(docs.recon)} : {matches:[]};
   for (const [id, body] of Object.entries(docs)) if (id.startsWith("p-") && body && body.date) periods[body.date] = clone(body);
   S.periods = periods;
 }
@@ -540,6 +542,7 @@ function render(){
   else if (S.view === "rules") m.innerHTML = viewRules();
   else if (S.view === "history") m.innerHTML = viewHistory();
   else if (S.view === "year") m.innerHTML = viewYear();
+  else if (S.view === "health") m.innerHTML = viewHealth();
   else if (S.view === "cats") m.innerHTML = viewCats();
   else if (S.view === "merges") m.innerHTML = viewMerges();
   else m.innerHTML = viewSettings();
@@ -798,6 +801,7 @@ function viewSearch(){
   const chip = (k, l) => `<button data-act="q-mode" data-m="${k}" aria-pressed="${mode===k}">${l}</button>`;
   return `<div class="topbar"><h1 style="display:flex;align-items:center;gap:12px"><button class="iconbtn" data-tab="home" aria-label="Back to Paycheck">${ICONS.left}</button>Search</h1></div>
   <input class="input" id="q" type="search" value="${esc(S.q || "")}" placeholder="Search names, labels or amounts" autocomplete="off" style="margin-bottom:10px">
+  ${savedSearchChips()}
   ${filterPanel()}
   <div class="seg" style="margin-bottom:12px">${chip("amazon","Amazon")}${chip("amazon-unlabeled","Amazon without a label")}${chip("amazon-orders","Amazon orders")}${chip("all","Everything")}</div>
   ${mode !== "all" ? amzPanel() : ""}
@@ -851,6 +855,8 @@ function viewHome(){
   const banners = [];
   { const L = latest ? savingsLedger(p) : null;
     if (L && L.left > 0.004) banners.push(`<button class="banner" data-act="save-moved" style="border-color:var(--savings)"><span class="dot" style="background:var(--savings)"></span><span><b>Move ${money(L.left)} to savings</b><span class="small muted">${L.before > 0.004 ? `${money(L.before)} left over from before + ` : ""}${money(r2(L.owed - L.moved))} from this paycheck. Tap when it’s moved.</span></span><span class="go">I moved it</span></button>`); }
+  { const due = closeoutDue()[0]; if (due) banners.push(`<button class="banner" data-act="co-open" data-p="${due}"><span class="dot" style="background:var(--ink)"></span><span><b>Close out the ${esc(short(due))} paycheck</b><span class="small muted">A quick checklist before you move on</span></span><span class="go">Close out</span></button>`); }
+  { const R = reconReminder(); if (R && latest) banners.push(`<div class="banner" style="flex-wrap:wrap"><span class="dot" style="background:var(--income)"></span><span style="flex:1;min-width:200px"><b>Double-check ${esc(monthName(R.month))} statements</b><span class="small muted">${esc(R.due.map(d => SOURCES[d.src]).join(", "))}</span></span><span class="row" style="gap:6px"><button class="btn sm" data-act="recon-open" data-src="${esc(R.due[0].src)}" data-m="${esc(R.month)}">Match</button><button class="btn ghost sm" data-act="recon-snooze" data-m="${esc(R.month)}">Skip this month</button></span></div>`); }
   if (nPend) banners.push(`<button class="banner" data-tab="review"><span class="dot" style="background:var(--debt)"></span><span><b>${nPend} charge${nPend>1?"s":""} waiting for review</b><span class="small muted">From your imported statements</span></span><span class="go">Review</span></button>`);
   const lb = lastBackup();
   if (!(FB.user && driveOn()) && (!lb || Math.round((toD(today) - toD(lb)) / 864e5) >= 14)) banners.push(`<button class="banner" data-act="backup"><span class="dot" style="background:var(--gas)"></span><span><b>${lb ? "Time for a backup" : "Back up your data"}</b><span class="small muted">${lb ? "Last one was " + short(lb) : "Everything is saved only on this device"}</span></span><span class="go">Back up</span></button>`);
@@ -869,7 +875,7 @@ function viewHome(){
     <h1 style="display:flex;align-items:center;gap:12px">Paycheck <button class="iconbtn" data-act="open-search" aria-label="Search charges" title="Search charges"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></button></h1>
     <div class="period-nav">
       <button class="iconbtn" data-act="prev" ${S.pIdx===0?"disabled":""} aria-label="Previous paycheck">${ICONS.left}</button>
-      <div class="period-label">${short(p)} – ${short(end)}<small>${latest ? (daysLeft ? daysLeft + " day" + (daysLeft>1?"s":"") + " left" : "Ended") : "Past paycheck"}</small></div>
+      <div class="period-label">${short(p)} – ${short(end)}<small>${per.closed ? `✅ Closed <button class="linkish small" data-act="co-open" data-p="${p}" style="font-weight:400;text-decoration:underline">view</button>` : latest ? (daysLeft ? daysLeft + " day" + (daysLeft>1?"s":"") + " left" : "Ended") : "Past paycheck"}</small></div>
       <button class="iconbtn" data-act="next" ${latest?"disabled":""} aria-label="Next paycheck">${ICONS.right}</button>
     </div>
   </div>
@@ -1167,7 +1173,7 @@ function viewSettings(){
       <label class="btn ghost" style="display:inline-flex;align-items:center;cursor:pointer">Restore from backup<input type="file" id="restoreIn" accept="*/*" style="position:absolute;width:1px;height:1px;opacity:0"></label>
     </div>
     <p class="small muted" style="margin:12px 0 0">A backup is one file. Keep a copy in Google Drive or email it to yourself. To move your data to another phone or computer, back up here and restore it there.</p>
-    <div class="row" style="margin-top:12px"><button class="btn ghost" data-act="open-rules">Your rules (${ruleCount()})</button><button class="btn ghost" data-act="open-cats">Your categories</button><button class="btn ghost" data-act="open-history">Change history</button><button class="btn ghost" data-act="open-merges">Check merges</button><button class="btn ghost" data-act="xlsx-open">Export like my spreadsheet (.xlsx)</button><button class="btn ghost" data-act="export">Export to spreadsheet (CSV)</button>${nRules?'<button class="btn ghost" data-act="clear-rules">Forget learned merchants</button>':""}</div>
+    <div class="row" style="margin-top:12px"><button class="btn ghost" data-act="open-rules">Your rules (${ruleCount()})</button><button class="btn ghost" data-act="open-cats">Your categories</button><button class="btn ghost" data-act="recon-open">Match a statement</button><button class="btn ghost" data-act="open-health">Health check${(() => { const n = healthIssues().length; return n ? ` (${n})` : ""; })()}</button><button class="btn ghost" data-act="open-history">Change history</button><button class="btn ghost" data-act="open-merges">Check merges</button><button class="btn ghost" data-act="xlsx-open">Export like my spreadsheet (.xlsx)</button><button class="btn ghost" data-act="export">Export to spreadsheet (CSV)</button>${nRules?'<button class="btn ghost" data-act="clear-rules">Forget learned merchants</button>':""}</div>
   </div>
   <div class="panel"><h2 style="margin-bottom:6px">Appearance</h2>
     <div class="seg">${[["auto","Match phone"],["light","Light"],["dark","Dark"]].map(([k,l]) => `<button data-act="theme" data-t="${k}" aria-pressed="${(document.documentElement.dataset.theme||"auto")===k}">${l}</button>`).join("")}</div>
@@ -1473,7 +1479,7 @@ function txSheet(t){
   openSheet(`<h2>${isNew?"Add a transaction":"Edit transaction"}</h2>
     <label class="field"><input class="input bigamt num" id="t-amt" inputmode="decimal" placeholder="$0.00" value="${t.amount===""?"":r2(t.amount)}" aria-label="Amount"><small style="text-align:center">Use a minus sign for a refund, like −24.64</small></label>
     ${isNew ? "" : `<p style="margin:-6px 0 12px"><button class="btn ghost sm" data-act="merchant" data-q="${esc(t.desc)}" data-o="${esc(t.orig || "")}">See every charge from “${esc(t.desc)}”</button></p>`}
-    <label class="field"><span>What was it?</span><input class="input" id="t-desc" value="${esc(t.desc)}" placeholder="Where it was charged"></label>
+    <label class="field"><span>What was it?</span><input class="input" id="t-desc" value="${esc(t.desc)}" placeholder="Where it was charged" ${isNew ? `list="merchant-list" data-new="1" autocomplete="off"` : ""}>${isNew ? `<datalist id="merchant-list">${merchantIndex().slice(0, 200).map(e => `<option value="${esc(e.desc)}">`).join("")}</datalist><small id="t-fillnote"></small>` : ""}</label>
     <label class="field"><span>Details</span><input class="input" id="t-details" value="${esc(t.details||"")}" placeholder="What it was for, who it was with…"></label>
     <label class="field"><span>Category</span>${catSelect("t-cat", t.cat || "")}</label>
     <label class="field"><span>Date</span><input class="input" type="date" id="t-date" value="${t.date}"></label>
@@ -1646,6 +1652,181 @@ async function exportYear(y){
   try{ saveBlob(`Payday ${y} in review.xlsx`, await buildXlsx([{name: `Year ${y}`, rows, cols: [34, 16, 12]}])); toast("Saved to your Downloads."); }
   catch(e){ toast("Couldn’t build the file. Try again."); }
 }
+
+/* =====================================================================
+   1. CLOSE OUT A PAYCHECK
+   ===================================================================== */
+const CLOSE_FROM = "2026-10-16";
+function closeoutInfo(p){
+  const end = periodEnd(p), c = calc(p), L = savingsLedger(p);
+  const inReview = S.inbox.items.filter(i => i.status === "pending" && i.date >= p && i.date <= end).length;
+  const amazonUnlabeled = (S.periods[p].txns || []).filter(t => t.fund !== "income" && +t.amount > 0 && AMAZON_RE.test((t.desc || "") + " " + (t.orig || "")) && !t.details && !(t.src === "sheet" && t.desc.replace(AMAZON_RE, "").replace(/[^a-z]/gi, "").length > 2)).length;
+  const toMove = L ? Math.max(0, L.left) : 0;
+  const months = [...new Set([p.slice(0, 7), end.slice(0, 7)])];
+  const unmatched = reconDue(months);
+  return {p, end, c, L, inReview, amazonUnlabeled, toMove, unmatched};
+}
+function closeoutDue(){
+  const list = periodList(), latest = list[list.length - 1], today = todayIso();
+  return list.filter(p => p >= CLOSE_FROM && !S.periods[p].closed && (p !== latest || periodEnd(p) < today));
+}
+function closeoutSheet(p){
+  const I = closeoutInfo(p), c = I.c, st = S.settings;
+  const item = (ok, text, btn) => `<div class="row" style="justify-content:space-between;flex-wrap:nowrap;padding:10px 14px;border-top:1px solid var(--line)"><span style="display:flex;gap:10px;align-items:flex-start"><span style="font-size:18px;line-height:1">${ok ? "✅" : "⬜"}</span><span>${text}</span></span>${ok ? "" : btn}</div>`;
+  const leftover = c.personalLeft;
+  const nextSave = leftover > 0 && p >= (st.leftoverFrom || "9999") ? r2(leftover * (+st.leftoverSavePct || 0)) : 0;
+  openSheet(`<h2>Close out the ${esc(short(p))} paycheck</h2>
+    <p class="muted" style="margin:-6px 0 12px">${esc(short(p))} to ${esc(short(I.end))}. Finish the checklist, then close it. You can still edit it after.</p>
+    <div class="list" style="padding:0">
+      ${item(!I.inReview, I.inReview ? `<b>${I.inReview}</b> charge${I.inReview===1?"":"s"} from this paycheck still in Review` : "Nothing left in Review", `<button class="btn sm" data-act="co-review">Review</button>`)}
+      ${I.L ? item(I.toMove < 0.005, I.toMove >= 0.005 ? `<b>${money(I.toMove)}</b> still to move to savings` : "Savings all moved", `<button class="btn sm" data-act="save-moved">I moved it</button>`) : ""}
+      ${item(!I.amazonUnlabeled, I.amazonUnlabeled ? `<b>${I.amazonUnlabeled}</b> Amazon charge${I.amazonUnlabeled===1?"":"s"} without a label` : "Amazon charges labeled", `<button class="btn ghost sm" data-act="co-amazon" data-p="${p}">Label</button>`)}
+      ${item(!I.unmatched.length, I.unmatched.length ? `Statement not matched yet: ${esc(I.unmatched.map(u => SOURCES[u.src] + " (" + monthName(u.month) + ")").join(", "))}` : "Statements matched", `<button class="btn ghost sm" data-act="recon-open" data-src="${esc((I.unmatched[0] || {}).src || "")}" data-m="${esc((I.unmatched[0] || {}).month || "")}">Match</button>`)}
+    </div>
+    <h3 style="margin:16px 0 6px">Summary</h3>
+    <div class="list" style="padding:0">
+      <div class="row" style="justify-content:space-between;padding:8px 14px"><span>Personal spent</span><b class="num">${money(c.personalSpent)} of ${money(r2(c.personalBudget + c.rolledIn))}</b></div>
+      <div class="row" style="justify-content:space-between;padding:8px 14px;border-top:1px solid var(--line)"><span>${leftover >= 0 ? "Left over" : "Overspent"}</span><b class="num" style="color:${leftover >= 0 ? "var(--pos)" : "var(--neg)"}">${money(Math.abs(leftover))}</b></div>
+      ${leftover > 0 ? `<div class="small muted" style="padding:0 14px 8px">${nextSave ? `${money(nextSave)} goes to savings and ${money(r2(leftover - nextSave))} rolls into the next paycheck.` : `Nothing happens with it.`}</div>` : leftover < 0 ? `<div class="small muted" style="padding:0 14px 8px">The next paycheck starts ${money(-leftover)} behind.</div>` : ""}
+      <div class="row" style="justify-content:space-between;padding:8px 14px;border-top:1px solid var(--line)"><span>Gas</span><b class="num">${money(c.gasSpent)} of ${money(c.gasBudget)}</b></div>
+      ${I.L ? `<div class="row" style="justify-content:space-between;padding:8px 14px;border-top:1px solid var(--line)"><span>Savings moved</span><b class="num">${money(I.L.moved)} of ${money(r2(I.L.before + I.L.owed))}</b></div>` : ""}
+    </div>
+    <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn ghost" data-act="close">Not yet</button><button class="btn" data-act="co-close" data-p="${p}">${I.inReview || I.toMove >= 0.005 || I.amazonUnlabeled || I.unmatched.length ? "Close anyway" : "Close paycheck"}</button></div>`);
+}
+
+/* =====================================================================
+   2. MATCH A STATEMENT (+ monthly reminder)
+   ===================================================================== */
+const monthName = m => { const [y, mo] = m.split("-").map(Number); return `${MON[mo-1]} ${y}`; };
+const RECON_SRCS = ["chase_bank", "chase_amazon", "paypal_mc", "paypal"];
+function accountsUsedIn(month){
+  const seen = new Set();
+  periodList().forEach(p => (S.periods[p].txns || []).forEach(t => { if (t.date.startsWith(month) && RECON_SRCS.includes(t.src)) seen.add(t.src); }));
+  return [...seen];
+}
+function reconDue(months){
+  const done = new Set((S.recon.matches || []).filter(m => m.ok).map(m => m.src + "|" + m.month));
+  const out = []; for (const month of months) for (const src of accountsUsedIn(month)) if (!done.has(src + "|" + month)) out.push({src, month});
+  return out;
+}
+function lastMonth(){ const d = toD(todayIso()); d.setDate(1); d.setMonth(d.getMonth() - 1); return iso(d).slice(0, 7); }
+function reconReminder(){
+  // From the 5th (statements are usually out by then), remind about last month's accounts until they're matched or snoozed.
+  const m = lastMonth(); if (+todayIso().slice(8) < 5) return null;
+  if ((S.settings.reconSnooze || "") === m) return null;
+  const due = reconDue([m]); return due.length ? {month: m, due} : null;
+}
+function reconTotals(src, from, to){
+  const rows = [];
+  periodList().forEach(p => (S.periods[p].txns || []).forEach(t => { if (t.src === src && t.date >= from && t.date <= to && t.fund !== "income" && t.fund !== "savings") rows.push({...t, p, bankAmt: +(t.bank !== undefined ? t.bank : t.amount)}); }));
+  const charges = r2(rows.filter(r => r.bankAmt > 0).reduce((a, r) => a + r.bankAmt, 0)), credits = r2(rows.filter(r => r.bankAmt < 0).reduce((a, r) => a - r.bankAmt, 0));
+  const inRange = i => i.src === src && i.date >= from && i.date <= to;
+  return {rows: rows.sort((a,b) => a.date.localeCompare(b.date)), charges, credits,
+    review: S.inbox.items.filter(i => i.status === "pending" && inRange(i)), dups: S.inbox.items.filter(i => i.status === "dup" && inRange(i)), denied: (S.inbox.denied || []).filter(inRange)};
+}
+function reconSheet(src, month){
+  src = src || "chase_amazon"; month = month || lastMonth();
+  const from = month + "-01", d = toD(from); d.setMonth(d.getMonth() + 1); d.setDate(0); const to = iso(d);
+  const prev = (S.recon.matches || []).find(m => m.src === src && m.month === month);
+  openSheet(`<h2>Match a statement</h2>
+    <p class="muted" style="margin:-6px 0 12px">A double check that nothing was missed or counted twice. Enter the total purchases from your statement and Payday compares it to what you confirmed.</p>
+    <div class="grid2">
+      <label class="field"><span>Account</span><select class="input" id="rc-src">${RECON_SRCS.map(k => `<option value="${k}" ${k===src?"selected":""}>${esc(SOURCES[k])}</option>`).join("")}</select></label>
+      <label class="field"><span>Month</span><input class="input" type="month" id="rc-month" value="${month}"></label>
+      <label class="field"><span>From</span><input class="input" type="date" id="rc-from" value="${prev ? prev.from : from}"></label>
+      <label class="field"><span>To</span><input class="input" type="date" id="rc-to" value="${prev ? prev.to : to}"></label>
+    </div>
+    <p class="small muted" style="margin:-6px 0 10px">Card statements usually don’t line up with the calendar month. Use the statement’s own dates if they’re different.</p>
+    <label class="field"><span>Statement’s total purchases / charges</span><input class="input num" id="rc-stmt" inputmode="decimal" placeholder="$0.00" value="${prev ? prev.stmt : ""}"><small>Not payments to the card or transfers. Those are left out of Payday on purpose.</small></label>
+    <div id="rc-out"></div>
+    <div class="row" style="justify-content:flex-end;margin-top:6px"><button class="btn ghost" data-act="close">Close</button><button class="btn" data-act="recon-check">Compare</button></div>`);
+}
+function reconCheck(){
+  const src = $("#rc-src").value, month = $("#rc-month").value, from = $("#rc-from").value, to = $("#rc-to").value, stmt = r2(Math.abs(parseAmt($("#rc-stmt").value)));
+  if (!from || !to || isNaN(stmt)){ toast("Fill in the dates and the statement total."); return; }
+  const R = reconTotals(src, from, to), diff = r2(stmt - R.charges), ok = Math.abs(diff) < 0.015;
+  S.recon.matches = [{id: uid(), src, month, from, to, stmt, payday: R.charges, diff, ok, at: Date.now()}, ...(S.recon.matches || []).filter(m => !(m.src === src && m.month === month))].slice(0, 120);
+  S.recon.kind = "recon"; store.save("recon", S.recon);
+  const hint = [];
+  if (R.review.length) hint.push(`${R.review.length} charge${R.review.length===1?" is":"s are"} still in Review (${money(R.review.reduce((a,i) => a + Math.max(0, -i.flow), 0))})`);
+  if (R.dups.length) hint.push(`${R.dups.length} hidden as duplicate${R.dups.length===1?"":"s"} (${money(R.dups.reduce((a,i) => a + Math.max(0, -i.flow), 0))})`);
+  if (R.denied.length) hint.push(`${R.denied.length} denied this paycheck`);
+  const exact = diff > 0 ? [...R.review, ...R.dups, ...R.denied].filter(i => Math.abs(Math.abs(i.flow) - diff) < 0.015) : R.rows.filter(r => Math.abs(r.bankAmt + diff) < 0.015);
+  $("#rc-out").innerHTML = `<div class="panel" style="margin:4px 0 12px;border-color:${ok ? "var(--savings)" : "var(--gas)"}">
+    <div class="row" style="justify-content:space-between"><b>${ok ? "✅ It matches" : diff > 0 ? `Payday is ${money(diff)} short` : `Payday has ${money(-diff)} too much`}</b><span class="small muted num">Statement ${money(stmt)} • Payday ${money(R.charges)}${R.credits ? ` (credits ${money(R.credits)})` : ""}</span></div>
+    ${ok ? "" : `<div class="small" style="margin-top:8px">${exact.length ? `<b>Probably this:</b> ${exact.map(x => `${esc(x.desc)} on ${esc(short(x.date))}`).join("; ")}.<br>` : ""}${hint.length ? `Not counted yet: ${esc(hint.join(", "))}.` : diff > 0 ? "Something on the statement may never have been pulled or imported. Compare the list below with your statement day by day." : "Something may be counted twice. Compare the list below with your statement."}</div>`}
+    ${ok ? "" : `<details style="margin-top:8px"><summary class="small" style="cursor:pointer;font-weight:700">Payday’s ${R.rows.length} charges for these dates</summary><div class="list" style="margin-top:6px">${R.rows.map(r => `<div class="tx" style="cursor:default"><span class="mid"><span class="d" style="display:block">${esc(r.desc)}</span><span class="c">${esc(short(r.date))}${r.bank !== undefined ? ` • your share of ${money(r.bank)}` : ""}</span></span><span class="a num">${money(r.bankAmt)}</span></div>`).join("")}</div></details>`}
+  </div>`;
+  toast(ok ? "Matched." : "Saved. Check what’s different below.");
+}
+
+/* =====================================================================
+   3. HEALTH CHECK
+   ===================================================================== */
+function healthIssues(){
+  const ign = new Set(S.settings.healthIgnore || []), out = [], today = todayIso(), all = [];
+  periodList().forEach(p => (S.periods[p].txns || []).forEach(t => all.push({t, p})));
+  for (const {t, p} of all){
+    // Old spreadsheet entries keep the paycheck you put them in; only newer charges are checked.
+    if (!t.pinP && t.src !== "sheet" && periodFor(t.date) !== p)
+      out.push({key: "wrongp|" + t.id, kind: "wrongp", p, t, text: `“${t.desc}” is dated ${short(t.date)} but filed in the ${short(p)} paycheck`, fix: "Move to " + short(periodFor(t.date))});
+    if (t.fund === "income" && (GAS_RE.test(t.desc) || STORE_OUT_RE.test(t.desc) || AMAZON_RE.test(t.desc)) && !/refund|return|cash ?back|reward/i.test(t.desc))
+      out.push({key: "inc|" + t.id, kind: "inc", p, t, text: `“${t.desc}” (${money(+t.amount)}) looks like a purchase but is filed as Extra income`, fix: "Make it a Personal charge"});
+    if (t.date > addDays(today, 1) || t.date < "2020-01-01")
+      out.push({key: "date|" + t.id, kind: "date", p, t, text: `“${t.desc}” has an odd date: ${t.date}`, fix: "Edit"});
+  }
+  // possible double entries: same amount and place within 2 days
+  const by = {}; all.forEach(x => { if (x.t.fund === "income" || x.t.fund === "savings") return; const k = r2(+x.t.amount).toFixed(2) + "|" + (norm(x.t.orig || x.t.desc) || ""); (by[k] = by[k] || []).push(x); });
+  Object.values(by).forEach(g => { if (g.length < 2) return; g.sort((a,b) => a.t.date.localeCompare(b.t.date)); for (let i = 1; i < g.length; i++){ const a = g[i-1], b = g[i]; if (Math.abs(dayDiff(b.t.date, a.t.date)) <= 2 && (a.t.src !== "sheet" || b.t.src !== "sheet")) out.push({key: "dup|" + [a.t.id, b.t.id].sort().join("|"), kind: "dup", p: b.p, t: b.t, other: a, text: `Possible double entry: “${b.t.desc}” ${money(+b.t.amount)} on ${short(a.t.date)} and ${short(b.t.date)}`, fix: "Delete the second"}); } });
+  // very large one-offs without a label
+  const amts = all.filter(x => x.t.fund === "personal" && +x.t.amount > 0).map(x => +x.t.amount).sort((a,b) => a-b), med = amts.length ? amts[Math.floor(amts.length / 2)] : 0;
+  all.forEach(({t, p}) => { if (t.fund === "personal" && +t.amount >= Math.max(300, med * 10) && !t.details && t.src !== "sheet") out.push({key: "big|" + t.id, kind: "big", p, t, text: `Large one-off: “${t.desc}” ${money(+t.amount)} on ${short(t.date)} has no label`, fix: "Add a label"}); });
+  const seenK = new Set();
+  return out.filter(x => !ign.has(x.key) && !seenK.has(x.key) && seenK.add(x.key));
+}
+function viewHealth(){
+  const iss = healthIssues();
+  return `<div class="topbar"><h1 style="display:flex;align-items:center;gap:12px"><button class="iconbtn" data-tab="settings" aria-label="Back to Settings">${ICONS.left}</button>Health check</h1></div>
+  <p class="muted" style="margin:0 0 12px">Things that look off in your confirmed charges. Fix them, or tap “It’s fine” and Payday won’t mention that one again.</p>
+  ${iss.length ? `<div class="list">${iss.map((x, i) => `<div style="padding:12px 14px;border-top:1px solid var(--line)"><div>${esc(x.text)}</div>
+    <div class="row" style="margin-top:8px"><button class="btn sm" data-act="health-fix" data-i="${i}">${esc(x.fix)}</button><button class="btn ghost sm" data-act="health-ok" data-k="${esc(x.key)}">It’s fine</button></div></div>`).join("")}</div>` : `<div class="list"><div class="empty"><h3>All healthy</h3>Nothing looks off.</div></div>`}`;
+}
+function healthFix(i){
+  const x = healthIssues()[i]; if (!x) return;
+  const {t, p} = x;
+  if (x.kind === "wrongp"){ const dest = periodFor(t.date); logHist({kind: "edits", text: `Moved “${t.desc}” to the ${short(dest)} paycheck`, edits: [{before: {p, t: clone(t), id: t.id}, afterP: dest}]}); S.periods[p].txns = S.periods[p].txns.filter(z => z.id !== t.id); S.periods[dest].txns.push(t); savePeriod(p); savePeriod(dest); toast("Moved."); }
+  else if (x.kind === "inc"){ logHist({kind: "edits", text: `Changed “${t.desc}” to a Personal charge`, edits: [{before: {p, t: clone(t), id: t.id}, afterP: p}]}); t.fund = "personal"; savePeriod(p); toast("Now a Personal charge."); }
+  else if (x.kind === "dup"){ logHist({kind: "delete", text: `Deleted double entry “${t.desc}” (${money(+t.amount)})`, list: [{p, t}]}); S.periods[p].txns = S.periods[p].txns.filter(z => z.id !== t.id); savePeriod(p); toast("Deleted. Undo it from Change history if needed."); }
+  else { txSheet(t); return; }
+  render();
+}
+
+/* =====================================================================
+   4. FASTER MANUAL ADDS
+   ===================================================================== */
+function merchantIndex(){
+  const m = {};
+  periodList().forEach(p => (S.periods[p].txns || []).forEach(t => { if (!t.desc) return; const k = t.desc.trim().toLowerCase(); const e = m[k] = m[k] || {desc: t.desc.trim(), n: 0, last: null}; e.n++; if (!e.last || t.date >= e.last.date) e.last = t; }));
+  return Object.values(m).sort((a,b) => b.n - a.n);
+}
+function fillFromMerchant(){
+  const el = $("#t-desc"); if (!el || !el.dataset.new) return;
+  const e = merchantIndex().find(x => x.desc.toLowerCase() === el.value.trim().toLowerCase()); if (!e) return;
+  const t = e.last;
+  if (!$("#t-amt").value) $("#t-amt").value = r2(Math.abs(+t.amount)).toFixed(2);
+  const btn = document.querySelector(`#fundPick [data-pickf="${t.fund}"]`); if (btn) btn.click();
+  if ($("#t-cat") && t.cat) $("#t-cat").value = t.cat;
+  $("#t-fillnote").textContent = `Filled from your last ${e.desc} charge (${short(t.date)}). Change anything you need.`;
+}
+
+/* =====================================================================
+   5. SAVED SEARCHES
+   ===================================================================== */
+function savedSearchChips(){
+  const ss = S.settings.savedSearches || [], active = (S.q || "") || Object.values(S.qf || {}).some(Boolean);
+  return `<div class="row" style="gap:6px;margin:0 0 10px">${ss.map((x, i) => `<span class="row" style="gap:0;flex-wrap:nowrap"><button class="btn ghost sm" data-act="ss-use" data-i="${i}" style="border-radius:999px 0 0 999px;min-height:34px">🔖 ${esc(x.name)}</button><button class="btn ghost sm" data-act="ss-del" data-i="${i}" aria-label="Delete saved search ${esc(x.name)}" style="border-radius:0 999px 999px 0;min-height:34px;border-left:0;padding:4px 10px">✕</button></span>`).join("")}${active ? `<button class="btn ghost sm" data-act="ss-save" style="min-height:34px">Save this search</button>` : ""}</div>`;
+}
+
 /* ---------- savings goals ---------- */
 // Your savings fill your goals in order: the first goal fills up, then the next one starts.
 function goalsList(){ return (S.settings.goals || []).filter(g => g && g.name && +g.target > 0); }
@@ -1729,7 +1910,7 @@ function learn(it){
   if (sk && S.rules.save[sk]){ delete S.rules.save[sk]; S.rules._dirty = true; }
   const k = norm(it.orig || it.desc); if (!k || it.fund === "paycheck") return; if (S.rules.map[k] !== it.fund){ S.rules.map[k] = it.fund; S.rules._dirty = true; } }
 function saveRules(){ if (S.rules._dirty){ delete S.rules._dirty; store.save("rules", S.rules); } }
-function txFromItem(it){ const t = {id: uid(), date: it.date, desc: it.desc, fund: it.fund, amount: it.fund === "income" ? r2(it.flow) : r2(-it.flow), src: it.src}; if (it.details) t.details = it.details; if (it.amz) t.amz = it.amz; if (it.cat) t.cat = it.cat; return t; }
+function txFromItem(it){ const t = {id: uid(), date: it.date, desc: it.desc, fund: it.fund, amount: it.fund === "income" ? r2(it.flow) : r2(-it.flow), src: it.src}; if (it.details) t.details = it.details; if (it.amz) t.amz = it.amz; if (it.cat) t.cat = it.cat; if (it.bank !== undefined && Math.abs(Math.abs(it.bank) - Math.abs(it.flow)) > 0.004) t.bank = r2(Math.abs(it.bank)); return t; }
 
 const busyIds = new Set();
 async function confirmItems(ids){
@@ -1797,6 +1978,7 @@ async function undoHist(hid){
   else if (e.kind === "add") removeTx(e.p, e.tid);
   else if (e.kind === "edit"){ removeTx(e.afterP, e.before.id); addTx(e.before.p, e.before.t); }
   else if (e.kind === "delete") (e.list || []).forEach(x => addTx(x.p, x.t));
+  else if (e.kind === "note"){ if (/^Closed out the /.test(e.text)){ const per = periodList().find(p => e.text.includes(short(p))); if (per && S.periods[per].closed){ delete S.periods[per].closed; touched.add(per); n++; } } }
   else if (e.kind === "edits") (e.edits || []).forEach(x => { removeTx(x.afterP, x.before.id); addTx(x.before.p, x.before.t); });
   for (const d of (e.createdPays || [])) if (S.periods[d] && !(S.periods[d].txns || []).length){ delete S.periods[d]; touched.delete(d); store.remove("p-" + d); }
   e.undone = true; store.save("history", S.hist);
@@ -2603,6 +2785,20 @@ document.addEventListener("click", async e => {
   else if (a === "range"){ S.range = el.dataset.r; render(); }
   else if (a === "save-moved") movedSheet();
   else if (a === "goals-edit") goalsSheet();
+  else if (a === "co-open") closeoutSheet(el.dataset.p);
+  else if (a === "co-review"){ closeSheet(); go("review"); }
+  else if (a === "co-amazon"){ closeSheet(); S.qMode = "amazon-unlabeled"; S.qf = {from: el.dataset.p, to: periodEnd(el.dataset.p)}; go("search"); }
+  else if (a === "co-close"){ const p = el.dataset.p; S.periods[p].closed = {at: Date.now()}; logHist({kind: "note", text: `Closed out the ${short(p)} paycheck`}); savePeriod(p); closeSheet(); render(); toast(`The ${short(p)} paycheck is closed.`); }
+  else if (a === "recon-open") reconSheet(el.dataset.src, el.dataset.m);
+  else if (a === "recon-check") reconCheck();
+  else if (a === "recon-snooze"){ S.settings.reconSnooze = el.dataset.m; store.save("settings", S.settings); render(); toast("Skipped for this month."); }
+  else if (a === "open-health") go("health");
+  else if (a === "health-fix") healthFix(+el.dataset.i);
+  else if (a === "health-ok"){ S.settings.healthIgnore = [...(S.settings.healthIgnore || []), el.dataset.k].slice(-500); store.save("settings", S.settings); render(); }
+  else if (a === "ss-use"){ const x = (S.settings.savedSearches || [])[+el.dataset.i]; if (x){ S.q = x.q || ""; S.qMode = x.mode || "all"; S.qf = {...(x.qf || {})}; S.qfOpen = Object.values(S.qf).some(Boolean); render(); } }
+  else if (a === "ss-del"){ S.settings.savedSearches.splice(+el.dataset.i, 1); store.save("settings", S.settings); render(); }
+  else if (a === "ss-save") openSheet(`<h2>Save this search</h2><label class="field"><span>Name</span><input class="input" id="ss-name" placeholder="e.g. Amazon card over $50"></label><div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="ss-save-ok">Save</button></div>`);
+  else if (a === "ss-save-ok"){ const n = $("#ss-name").value.trim(); if (!n){ toast("Give it a name."); return; } S.settings.savedSearches = [...(S.settings.savedSearches || []), {id: uid(), name: n, q: S.q || "", mode: S.qMode || "all", qf: {...(S.qf || {})}}]; store.save("settings", S.settings); closeSheet(); render(); toast("Saved search added."); }
   else if (a === "open-year") go("year");
   else if (a === "open-cats") go("cats");
   else if (a === "year-export") exportYear(el.dataset.y);
@@ -2740,7 +2936,9 @@ document.addEventListener("click", async e => {
   else if (a === "clear-rules"){ S.rules = {map:{}}; store.save("rules", S.rules); render(); toast("Learned merchants cleared."); }
   else if (a === "theme"){ const t = el.dataset.t; if (t === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t; try{ localStorage.setItem("payday-theme", t); }catch(_){} render(); }
 });
-document.addEventListener("input", e => { if (e.target.id === "gh-repo" || e.target.id === "gh-token") ghRead(); if (e.target.id === "q"){ S.q = e.target.value; $("#qres").innerHTML = searchResults(); } });
+document.addEventListener("input", e => {
+  if (e.target.id === "t-desc") fillFromMerchant();
+  if (e.target.id === "rc-month" && e.target.value){ const m = e.target.value, d = toD(m + "-01"); d.setMonth(d.getMonth() + 1); d.setDate(0); $("#rc-from").value = m + "-01"; $("#rc-to").value = iso(d); } if (e.target.id === "gh-repo" || e.target.id === "gh-token") ghRead(); if (e.target.id === "q"){ S.q = e.target.value; $("#qres").innerHTML = searchResults(); } });
 document.addEventListener("change", e => {
   if (e.target.dataset && e.target.dataset.qf !== undefined){ S.qf = {...(S.qf || {}), [e.target.dataset.qf]: e.target.value.trim()}; S.qfOpen = true; render(); return; }
   if (e.target.dataset && e.target.dataset.act === "year-pick"){ S.year = e.target.value; render(); return; }
