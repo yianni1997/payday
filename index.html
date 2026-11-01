@@ -188,6 +188,18 @@ textarea.input{min-height:120px;font-family:ui-monospace,Menlo,Consolas,monospac
 .selbar .row{gap:8px}
 .rv.picked{border-color:var(--ink);box-shadow:0 0 0 1.5px var(--ink) inset}
 .rck{width:24px;height:24px;flex:none;margin:2px 4px 0 0;accent-color:var(--ink);cursor:pointer}
+.desk-only{display:none}
+@media (min-width:900px){.desk-only{display:inline-flex}}
+.rv.cmp{padding:6px 10px;margin-bottom:4px;border-radius:10px}
+.crow{display:flex;align-items:center;gap:10px}
+.crow .cdate{width:52px;flex:none}
+.crow .cdesc{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.crow .chip{flex:none}
+.crow .csel{width:auto;min-height:34px;padding:4px 8px;font-size:14px;flex:none}
+.crow .camt{width:96px;text-align:right;font-family:var(--display);font-weight:700;flex:none}
+.crow .camt.in{color:var(--pos)}
+.crow .btn.sm{min-height:34px;padding:4px 12px;flex:none}
+.rv.grp:not(.cmp){border-style:dashed}
 .rv.kfocus{outline:3px solid var(--focus);outline-offset:2px}
 .kbd-hint{display:none}
 @media (min-width:900px){.kbd-hint{display:block}}
@@ -303,8 +315,9 @@ const SOURCES = {
 };
 /* ---------- version ---------- */
 // Bump APP_VERSION (and the cache name in sw.js to match) with every update, and add a line to CHANGES.
-const APP_VERSION = 30, APP_DATE = "2026-10-31";
+const APP_VERSION = 31, APP_DATE = "2026-10-31";
 const CHANGES = [
+  [31, "2026-10-31", "Repeats grouped in Review, merchant view, change history with undo, check merges, paycheck notes, compact Review on PC."],
   [30, "2026-10-31", "Version number shown at the bottom of every page. Tap it to see what changed."],
   [29, "2026-10-31", "Your rules page, Undo after confirm or deny, Denied this paycheck, keyboard shortcuts in Review, spreadsheet-style .xlsx export."],
   [28, "2026-10-31", "Savings goals."],
@@ -398,6 +411,7 @@ function applyDocs(docs){
   S.inbox = docs.inbox ? {items:[], seen:[], ...clone(docs.inbox)} : {items:[], seen:[]};
   S.rules = docs.rules ? {map:{}, ...clone(docs.rules)} : {map:{}};
   S.amazon = docs.amazon ? {ships:[], ...clone(docs.amazon)} : {ships:[]};
+  S.hist = docs.history ? {entries:[], ...clone(docs.history)} : {entries:[]};
   for (const [id, body] of Object.entries(docs)) if (id.startsWith("p-") && body && body.date) periods[body.date] = clone(body);
   S.periods = periods;
 }
@@ -514,6 +528,8 @@ function render(){
   else if (S.view === "trends") m.innerHTML = viewTrends();
   else if (S.view === "search") m.innerHTML = viewSearch();
   else if (S.view === "rules") m.innerHTML = viewRules();
+  else if (S.view === "history") m.innerHTML = viewHistory();
+  else if (S.view === "merges") m.innerHTML = viewMerges();
   else m.innerHTML = viewSettings();
   m.insertAdjacentHTML("beforeend", `<button class="ver" data-act="whatsnew" aria-label="${verLabel()}, see what’s new">${verLabel()} • ${short(APP_DATE)}</button>`);
 }
@@ -802,6 +818,7 @@ function viewHome(){
     </div>
   </div>
   ${latest && plaidUrl() ? `<button class="banner" data-act="home-pull" ${PL.busy ? "disabled" : ""}><span class="dot" style="background:var(--personal);border:1.5px solid var(--ink)"></span><span><b>${PL.busy ? `<span class="spinner"></span> ${esc(PL.busy)}` : "Pull new charges from my bank"}</b><span class="small muted">${PL.err ? esc(PL.err) : "Everything for this paycheck goes to Review"}</span></span><span class="go">${PL.busy ? "" : "Pull"}</span></button>${PL.last && !PL.busy ? `<div style="margin:-6px 0 12px;text-align:right"><button class="btn ghost sm" data-act="pull-results">See what the last pull found</button></div>` : ""}` : ""}
+  ${per.note ? `<button class="banner" data-act="edit-pay" style="background:var(--sunk)"><span>📝</span><span style="white-space:pre-wrap">${esc(per.note)}</span><span class="go small">Edit</span></button>` : ""}
   ${banners.join("")}
   <div class="home-grid">
     <div class="col-left">
@@ -866,21 +883,65 @@ function fixWaitingDirections(){
   }
   if (n){ setTimeout(() => { saveInbox(); toast(`${n} charge${n===1?" was":"s were"} showing as money in. Fixed.`); }, 0); }
 }
+function isCompact(){ try{ return localStorage.getItem("payday-compact") === "1" && matchMedia("(min-width:900px)").matches; }catch(e){ return false; } }
+function fundOptsFor(flow){ return flow < 0 ? [["personal","Personal"],["gas","Gas"],["debt","Debt"],["savings","Moved to savings"],["skip","Skip"]] : [["income","Extra income"],["paycheck","Paycheck"],["personal","Refund"],["skip","Skip"]]; }
+function compactRow(it, picked){
+  const opts = fundOptsFor(it.flow).map(([v,l]) => `<option value="${v}" ${it.fund===v?"selected":""}>${l}</option>`).join("");
+  return `<article class="rv cmp ${picked ? "picked" : ""}" data-rid="${esc(it.id)}"><div class="crow">
+    ${S.rsel ? `<input type="checkbox" class="rck" data-rsel="${esc(it.id)}" ${picked ? "checked" : ""} aria-label="Select ${esc(it.desc)}">` : ""}
+    <span class="cdate small muted">${esc(short(it.date))}</span>
+    <button class="linkish cdesc" data-act="edit-item" data-id="${esc(it.id)}" title="${esc(it.desc)}">${esc(it.desc)}${it.details ? ` <span class="muted" style="font-weight:400">${esc(it.details)}</span>` : ""}</button>
+    <span class="chip">${esc(SOURCES[it.src] || it.src)}</span>
+    <select class="input csel" data-act="cpick" data-id="${esc(it.id)}" aria-label="Where it goes">${opts}</select>
+    <span class="camt num ${it.flow>0?"in":""}">${it.flow>0?"+"+money(it.flow):money(-it.flow)}</span>
+    <button class="btn danger sm" data-act="deny" data-id="${esc(it.id)}" title="Deny (D)">✕</button><button class="btn sm" data-act="confirm" data-id="${esc(it.id)}" title="Confirm (C)">✓</button>
+  </div></article>`;
+}
+function groupCard(g, gk, compact){
+  const ids = g.map(i => i.id).join(","), total = r2(g.reduce((a, i) => a + Math.abs(i.flow), 0)), first = g[0];
+  const same = g.every(i => i.fund === first.fund) ? first.fund : null, picked = S.rsel && g.every(i => S.rsel.has(i.id)), out = first.flow < 0;
+  const ck = S.rsel ? `<input type="checkbox" class="rck" data-rselg="${esc(ids)}" ${picked ? "checked" : ""} aria-label="Select all ${g.length}">` : "";
+  if (compact){
+    const opts = (same ? [] : [["","Mixed"]]).concat(fundOptsFor(first.flow)).map(([v,l]) => `<option value="${v}" ${(same||"")===v?"selected":""}>${l}</option>`).join("");
+    return `<article class="rv cmp grp ${picked ? "picked" : ""}" data-rid="${esc(first.id)}" data-gids="${esc(ids)}" data-gk="${esc(gk)}"><div class="crow">${ck}
+      <span class="cdate small muted">${esc(short(first.date))}</span>
+      <button class="linkish cdesc" data-act="gexp" data-k="${esc(gk)}" title="Show each one">${esc(first.desc)} <span class="chip">×${g.length}</span></button>
+      <span class="chip">${esc(SOURCES[first.src] || first.src)}</span>
+      <select class="input csel" data-act="gcpick" data-ids="${esc(ids)}" aria-label="Where they go">${opts}</select>
+      <span class="camt num ${out?"":"in"}">${out?"":"+"}${money(total)}</span>
+      <button class="btn danger sm" data-act="gdeny" data-ids="${esc(ids)}" title="Deny all ${g.length}">✕</button><button class="btn sm" data-act="gconfirm" data-ids="${esc(ids)}" title="Confirm all ${g.length}">✓</button>
+    </div></article>`;
+  }
+  return `<article class="rv grp ${picked ? "picked" : ""}" data-rid="${esc(first.id)}" data-gids="${esc(ids)}" data-gk="${esc(gk)}">
+    <div class="top">${ck}<div class="mid"><div class="desc">${esc(first.desc)} <span class="chip">×${g.length}</span></div><div class="meta">${esc(short(first.date))} • <span class="chip">${esc(SOURCES[first.src]||first.src)}</span> • ${g.map(i => money(Math.abs(i.flow))).join(", ")}</div></div>
+    <div class="amt num ${out?"":"in"}">${out?"":"+"}${money(total)}</div></div>
+    <div class="seg" role="group" aria-label="Where they go" style="margin:12px 0">${fundOptsFor(first.flow).map(([f, l]) => `<button data-act="gpick" data-ids="${esc(ids)}" data-fund="${f}" aria-pressed="${same===f}"><span class="sw" style="background:${FUNDS[f].color}"></span>${l}</button>`).join("")}</div>
+    <div class="row" style="justify-content:space-between"><span class="small muted">${g.length} charges from the same place on the same day</span>
+    <div class="acts"><button class="btn danger sm" data-act="gdeny" data-ids="${esc(ids)}">Deny all ${g.length}</button><button class="btn ghost sm" data-act="gexp" data-k="${esc(gk)}">Show each</button><button class="btn sm" data-act="gconfirm" data-ids="${esc(ids)}">Confirm all ${g.length}</button></div></div>
+  </article>`;
+}
 function viewReview(){
   fixWaitingDirections(); amzScrub();
   const items = pending().sort((a,b) => b.date.localeCompare(a.date));
   const dups = S.inbox.items.filter(i => i.status === "dup");
   const multi = new Set(items.map(i => periodFor(i.date))).size > 1, latestP = periodList().slice(-1)[0];
-  const head = `<div class="topbar"><h1>Review</h1></div>${items.length ? `<p class="small muted kbd-hint" style="margin:-8px 0 12px">Keyboard: ↑ ↓ move, C confirm, D deny, E edit, U undo. Pick a fund: P Personal, G Gas, B Debt, S Savings, I Extra income, F Refund, Y Paycheck, X Skip. Space selects in Select mode.</p>` : ""}`;
+  const head = `<div class="topbar"><h1>Review</h1><button class="btn ghost sm desk-only" data-act="compact-toggle">${isCompact() ? "Roomy view" : "Compact view"}</button></div>${items.length ? `<p class="small muted kbd-hint" style="margin:-8px 0 12px">Keyboard: ↑ ↓ move, C confirm, D deny, E edit (or open a group), U undo. Pick a fund: P Personal, G Gas, B Debt, S Savings, I Extra income, F Refund, Y Paycheck, X Skip. Space selects in Select mode.</p>` : ""}`;
   const den = deniedNow().sort((a,b) => b.date.localeCompare(a.date));
   const deniedHtml = den.length ? `<details class="dups"><summary>Denied this paycheck (${den.length})</summary>${den.map(it => `<article class="rv"><div class="top"><div class="mid"><div class="desc">${esc(it.desc)}</div><div class="meta">${esc(short(it.date))} • <span class="chip">${esc(SOURCES[it.src]||it.src)}</span></div></div><div class="amt num ${it.flow>0?"in":""}">${it.flow>0?"+"+money(it.flow):money(-it.flow)}</div></div><div class="acts" style="margin-top:10px"><button class="btn sm" data-act="restore-denied" data-id="${esc(it.id)}">Restore to Review</button></div></article>`).join("")}</details>` : "";
   if (!items.length && !dups.length) return head + deniedHtml + `<div class="list"><div class="empty"><h3>All caught up</h3>Import a statement and new charges will show up here for you to confirm.<div style="margin-top:14px"><button class="btn" data-tab="import">Import a statement</button></div></div></div>` + deniedHtml;
+  const compact = isCompact();
+  const gkey = it => [it.date, it.src, norm(it.orig || it.desc), it.flow < 0 ? "o" : "i"].join("|");
+  const groups = {}; items.forEach(it => (groups[gkey(it)] = groups[gkey(it)] || []).push(it));
+  const emitted = new Set();
   const body = items.map((it, ix) => {
-    const pIn = periodFor(it.date);
+    const pIn = periodFor(it.date), gk = gkey(it), grp = groups[gk];
     const hdr = multi && (ix === 0 || periodFor(items[ix-1].date) !== pIn) ? `<h3 style="margin:${ix?22:4}px 0 8px">${pIn === latestP ? "This paycheck" : "Past paycheck"}: ${esc(short(pIn))} to ${esc(short(minIso(periodEnd(pIn), todayIso())))} <span class="muted small">(${items.filter(x => periodFor(x.date) === pIn).length})</span>${S.rsel ? ` <button class="btn ghost sm" style="min-height:30px;padding:3px 10px;margin-left:6px" data-act="rsel-period" data-p="${esc(pIn)}">Select these</button>` : ""}</h3>` : "";
     const where = it.fund === "paycheck" ? `Starts a new paycheck on ${short(it.date)}` : it.fund === "skip" ? "Won’t be counted" : pIn ? `Goes in the ${short(pIn)} paycheck` : "";
     const picked = S.rsel && S.rsel.has(it.id);
-    return hdr + `<article class="rv ${picked ? "picked" : ""}" data-rid="${esc(it.id)}">
+    if (grp.length > 1 && !(S.rexp && S.rexp.has(gk))){ if (emitted.has(gk)) return ""; emitted.add(gk); return hdr + groupCard(grp, gk, compact); }
+    const ghead = grp.length > 1 && grp[0] === it ? `<div class="row" style="justify-content:space-between;margin:6px 0"><b class="small">${esc(it.desc)} ×${grp.length}, ${esc(short(it.date))}</b><button class="btn ghost sm" data-act="gexp" data-k="${esc(gk)}">Group them again</button></div>` : "";
+    if (compact) return hdr + ghead + compactRow(it, picked);
+    return hdr + ghead + `<article class="rv ${picked ? "picked" : ""}" data-rid="${esc(it.id)}">
       <div class="top">${S.rsel ? `<input type="checkbox" class="rck" data-rsel="${esc(it.id)}" ${picked ? "checked" : ""} aria-label="Select ${esc(it.desc)}">` : ""}<div class="mid"><button class="desc linkish" data-act="edit-item" data-id="${esc(it.id)}" aria-label="Rename or add details">${esc(it.desc)}<span class="pen" aria-hidden="true">✎</span></button>${it.details?`<div class="details">${esc(it.details)}</div>`:""}<div class="meta">${esc(short(it.date))} • <span class="chip">${esc(SOURCES[it.src]||it.src)}</span></div></div>
       <div class="amt num ${it.flow>0?"in":""}">${it.flow>0?"+"+money(it.flow):money(-it.flow)}</div></div>
       ${fundSeg(it)}
@@ -889,7 +950,7 @@ function viewReview(){
       ${it.note?`<div class="note">${esc(it.note)}</div>`:""}
     </article>`;
   }).join("");
-  const dupHtml = dups.length ? `<details class="dups"><summary>${dups.length} hidden as duplicates</summary>${dups.map(it => `<article class="rv"><div class="top"><div class="mid"><div class="desc">${esc(it.desc)}</div><div class="meta">${esc(short(it.date))} • <span class="chip">${esc(SOURCES[it.src]||it.src)}</span></div></div><div class="amt num">${money(Math.abs(it.flow))}</div></div><div class="note">${esc(it.dupNote||"Matches another charge")}</div><div class="acts" style="margin-top:10px"><button class="btn ghost sm" data-act="dismiss-dup" data-id="${esc(it.id)}">It’s a duplicate</button><button class="btn sm" data-act="undup" data-id="${esc(it.id)}">Not a duplicate</button></div></article>`).join("")}</details>` : "";
+  const dupHtml = dups.length ? `<details class="dups"><summary>${dups.length} hidden as duplicates</summary><p class="small" style="margin:0 0 8px"><button class="btn ghost sm" data-act="open-merges">Check all merges</button></p>${dups.map(it => `<article class="rv"><div class="top"><div class="mid"><div class="desc">${esc(it.desc)}</div><div class="meta">${esc(short(it.date))} • <span class="chip">${esc(SOURCES[it.src]||it.src)}</span></div></div><div class="amt num">${money(Math.abs(it.flow))}</div></div><div class="note">${esc(it.dupNote||"Matches another charge")}</div><div class="acts" style="margin-top:10px"><button class="btn ghost sm" data-act="dismiss-dup" data-id="${esc(it.id)}">It’s a duplicate</button><button class="btn sm" data-act="undup" data-id="${esc(it.id)}">Not a duplicate</button></div></article>`).join("")}</details>` : "";
   if (S.rsel) for (const id of [...S.rsel]) if (!items.some(i => i.id === id)) S.rsel.delete(id);
   const n = S.rsel ? S.rsel.size : 0;
   const setOpts = [["","Set selected to…"],["personal","Personal"],["gas","Gas"],["debt","Debt"],["savings","Moved to savings"],["income","Extra income"],["refund","Refund"],["skip","Skip"]].map(([k,l]) => `<option value="${k}">${l}</option>`).join("");
@@ -1045,7 +1106,7 @@ function viewSettings(){
       <label class="btn ghost" style="display:inline-flex;align-items:center;cursor:pointer">Restore from backup<input type="file" id="restoreIn" accept="*/*" style="position:absolute;width:1px;height:1px;opacity:0"></label>
     </div>
     <p class="small muted" style="margin:12px 0 0">A backup is one file. Keep a copy in Google Drive or email it to yourself. To move your data to another phone or computer, back up here and restore it there.</p>
-    <div class="row" style="margin-top:12px"><button class="btn ghost" data-act="open-rules">Your rules (${ruleCount()})</button><button class="btn ghost" data-act="xlsx-open">Export like my spreadsheet (.xlsx)</button><button class="btn ghost" data-act="export">Export to spreadsheet (CSV)</button>${nRules?'<button class="btn ghost" data-act="clear-rules">Forget learned merchants</button>':""}</div>
+    <div class="row" style="margin-top:12px"><button class="btn ghost" data-act="open-rules">Your rules (${ruleCount()})</button><button class="btn ghost" data-act="open-history">Change history</button><button class="btn ghost" data-act="open-merges">Check merges</button><button class="btn ghost" data-act="xlsx-open">Export like my spreadsheet (.xlsx)</button><button class="btn ghost" data-act="export">Export to spreadsheet (CSV)</button>${nRules?'<button class="btn ghost" data-act="clear-rules">Forget learned merchants</button>':""}</div>
   </div>
   <div class="panel"><h2 style="margin-bottom:6px">Appearance</h2>
     <div class="seg">${[["auto","Match phone"],["light","Light"],["dark","Dark"]].map(([k,l]) => `<button data-act="theme" data-t="${k}" aria-pressed="${(document.documentElement.dataset.theme||"auto")===k}">${l}</button>`).join("")}</div>
@@ -1349,6 +1410,7 @@ function txSheet(t){
   t = t || {id:"", date: todayIso(), desc:"", amount:"", fund:"personal"};
   openSheet(`<h2>${isNew?"Add a transaction":"Edit transaction"}</h2>
     <label class="field"><input class="input bigamt num" id="t-amt" inputmode="decimal" placeholder="$0.00" value="${t.amount===""?"":r2(t.amount)}" aria-label="Amount"><small style="text-align:center">Use a minus sign for a refund, like −24.64</small></label>
+    ${isNew ? "" : `<p style="margin:-6px 0 12px"><button class="btn ghost sm" data-act="merchant" data-q="${esc(t.desc)}" data-o="${esc(t.orig || "")}">See every charge from “${esc(t.desc)}”</button></p>`}
     <label class="field"><span>What was it?</span><input class="input" id="t-desc" value="${esc(t.desc)}" placeholder="Where it was charged"></label>
     <label class="field"><span>Details</span><input class="input" id="t-details" value="${esc(t.details||"")}" placeholder="What it was for, who it was with…"></label>
     <label class="field"><span>Date</span><input class="input" type="date" id="t-date" value="${t.date}"></label>
@@ -1366,6 +1428,7 @@ function periodSheet(edit){
   openSheet(`<h2>${edit?"Edit paycheck":"New paycheck"}</h2>
     <label class="field"><span>Take-home amount on the paystub</span><input class="input bigamt num" id="p-amt" inputmode="decimal" value="${amt}" placeholder="$0.00"></label>
     <label class="field"><span>Paystub date</span><input class="input" type="date" id="p-date" value="${date}" ${edit?"disabled":""}></label>
+    <label class="field"><span>Notes</span><textarea class="input" id="p-note" placeholder="e.g. covered dad’s half of T-Mobile, car repair" style="min-height:70px;font-family:var(--body);font-size:15px">${esc(edit ? (S.periods[p].note || "") : "")}</textarea></label>
     ${edit ? (() => { const c = calc(p); return `<label class="field"><span>${c.carry < 0 ? "Leftover rolled in from last paycheck" : "Overspending carried in from last paycheck"}</span><input class="input num" id="p-carry" inputmode="decimal" value="${Math.abs(c.carry)}" placeholder="0.00" data-sign="${c.carry < 0 ? -1 : 1}"><small>${c.autoCarry ? "Worked out from last paycheck." : "Set by hand."} ${c.carry < 0 ? "Change it if you used some of that leftover another way." : "Lower it if you covered some of it another way."} Clear it to have it worked out automatically.</small></label>`; })() : ""}
     <div class="row" style="justify-content:space-between">
       ${edit && !(S.periods[p].txns||[]).length && list.length>1 ? `<button class="btn danger" data-act="del-period">Delete paycheck</button>` : "<span></span>"}
@@ -1376,6 +1439,7 @@ function periodSheet(edit){
 function itemSheet(it){
   const orig = it.orig || it.desc, bank = it.bank !== undefined ? it.bank : it.flow;
   openSheet(`<h2>Edit before confirming</h2>
+    <p style="margin:-6px 0 12px"><button class="btn ghost sm" data-act="merchant" data-q="${esc(it.desc)}" data-o="${esc(it.orig || "")}">See every charge from here</button></p>
     <label class="field"><span>Name</span><input class="input" id="i-desc" value="${esc(it.desc)}"></label>
     <label class="field"><span>Details</span><input class="input" id="i-details" value="${esc(it.details||"")}" placeholder="What it was for, who it was with…"></label>
     <label class="field"><span>Date</span><input class="input" type="date" id="i-date" value="${it.date}"></label>
@@ -1535,14 +1599,14 @@ async function confirmItems(ids){
   try{ await confirmItemsRun(items, snap); } finally { items.forEach(i => busyIds.delete(i.id)); }
 }
 async function confirmItemsRun(items, snap){
-  const touched = new Set(); let made = 0, skipped = 0, pays = 0;
+  const touched = new Set(); let made = 0, skipped = 0, pays = 0; const added = [], createdPays = [];
   // check everything can land BEFORE changing anything, so a failure can't leave half the batch added
   const newPayDates = items.filter(i => i.fund === "paycheck").map(i => i.date);
   const hasHome = periodList().length > 0 || newPayDates.length > 0;
   if (!hasHome && items.some(i => i.fund !== "paycheck" && i.fund !== "skip")){ toast("Add a paycheck first so charges have somewhere to go."); return; }
   // paychecks first so later charges land in them
   items.filter(i => i.fund === "paycheck").sort((a,b)=>a.date.localeCompare(b.date)).forEach(it => {
-    if (!S.periods[it.date]) S.periods[it.date] = {kind:"period", date: it.date, amount: r2(it.flow), txns: []};
+    if (!S.periods[it.date]){ S.periods[it.date] = {kind:"period", date: it.date, amount: r2(it.flow), txns: []}; createdPays.push(it.date); }
     else S.periods[it.date].amount = r2(it.flow);
     touched.add(it.date); pays++;
   });
@@ -1552,24 +1616,57 @@ async function confirmItemsRun(items, snap){
     if (it.fund === "skip"){ skipped++; continue; }
     const p = periodFor(it.date);
     if (!p){ toast("Add a paycheck first so charges have somewhere to go."); return; }
-    (S.periods[p].txns = S.periods[p].txns || []).push(txFromItem(it)); touched.add(p); made++;
+    const tNew = txFromItem(it); (S.periods[p].txns = S.periods[p].txns || []).push(tNew); added.push({p, id: tNew.id}); touched.add(p); made++;
   }
   S.inbox.items = S.inbox.items.filter(i => !items.includes(i));
   render();
   const saves = [saveInbox(), ...[...touched].map(savePeriod)];
   saveRules();
   await Promise.all(saves);
-  toastUndo([made && `${made} added`, pays && `${pays} paycheck${pays>1?"s":""} started`, skipped && `${skipped} skipped`].filter(Boolean).join(", ") + ".", snap);
+  const msg = [made && `${made} added`, pays && `${pays} paycheck${pays>1?"s":""} started`, skipped && `${skipped} skipped`].filter(Boolean).join(", ") + ".";
+  const hid = logHist({kind: "confirm", text: `Confirmed ${items.length === 1 ? "“" + items[0].desc + "” (" + money(Math.abs(items[0].flow)) + ")" : items.length + " charges"}${skipped ? `, ${skipped} skipped` : ""}`, items, added, createdPays});
+  toastUndo(msg, snap, hid);
+}
+function logHist(e){
+  S.hist = S.hist || {entries:[]};
+  const cutoff = Date.now() - 60 * 864e5;
+  const entry = {id: uid(), at: Date.now(), ...clone(e)};
+  S.hist.entries = [entry, ...S.hist.entries.filter(x => x.at > cutoff)].slice(0, 150);
+  S.hist.kind = "history"; store.save("history", S.hist);
+  return entry.id;
+}
+async function undoHist(hid){
+  const e = (S.hist.entries || []).find(x => x.id === hid); if (!e || e.undone) return;
+  const touched = new Set(); let inbox = false, n = 0;
+  const removeTx = (p, id) => { for (const q of (S.periods[p] ? [p] : periodList())){ const per = S.periods[q]; const before = (per.txns || []).length; per.txns = (per.txns || []).filter(t => t.id !== id); if (per.txns.length !== before){ touched.add(q); n++; return true; } } return false; };
+  const addTx = (p, t) => { const q = S.periods[p] ? p : periodFor(t.date); if (!q) return; if ((S.periods[q].txns || []).some(x => x.id === t.id)) return; (S.periods[q].txns = S.periods[q].txns || []).push(clone(t)); touched.add(q); n++; };
+  const backToReview = items => items.forEach(it => { if (!S.inbox.items.some(x => x.id === it.id)){ const c = {...clone(it), status: "pending"}; delete c.deniedAt; S.inbox.items.push(c); inbox = true; n++; } S.inbox.denied = (S.inbox.denied || []).filter(d => d.id !== it.id); });
+  if (e.kind === "confirm"){ (e.added || []).forEach(a => removeTx(a.p, a.id)); backToReview(e.items || []); }
+  else if (e.kind === "deny") backToReview(e.items || []);
+  else if (e.kind === "add") removeTx(e.p, e.tid);
+  else if (e.kind === "edit"){ removeTx(e.afterP, e.before.id); addTx(e.before.p, e.before.t); }
+  else if (e.kind === "delete") (e.list || []).forEach(x => addTx(x.p, x.t));
+  for (const d of (e.createdPays || [])) if (S.periods[d] && !(S.periods[d].txns || []).length){ delete S.periods[d]; touched.delete(d); store.remove("p-" + d); }
+  e.undone = true; store.save("history", S.hist);
+  S.pIdx = null; render(); await Promise.all([...[...touched].map(savePeriod), inbox ? saveInbox() : null]);
+  toast(n ? "Undone." : "Nothing left to undo. It was already changed back.");
+}
+function viewHistory(){
+  const es = (S.hist && S.hist.entries) || [];
+  return `<div class="topbar"><h1 style="display:flex;align-items:center;gap:12px"><button class="iconbtn" data-tab="settings" aria-label="Back to Settings">${ICONS.left}</button>Change history</h1></div>
+  <p class="muted" style="margin:0 0 12px">What you confirmed, denied, added, edited or deleted in the last 60 days. Undo puts that one change back.</p>
+  ${es.length ? `<div class="list">${es.map(e => `<div class="tx" style="cursor:default;align-items:flex-start"><span class="mid"><span class="d" style="display:block;white-space:normal">${esc(e.text)}</span><span class="c">${esc(new Date(e.at).toLocaleString("en-US", {month:"short", day:"numeric", hour:"numeric", minute:"2-digit"}))}</span></span>${e.undone ? `<span class="small muted">Undone</span>` : `<button class="btn ghost sm" data-act="hist-undo" data-id="${esc(e.id)}">Undo</button>`}</div>`).join("")}</div>` : `<div class="list"><div class="empty">Nothing yet. Changes show up here as you make them.</div></div>`}`;
 }
 let UNDO = null, undoT;
 function snapUndo(){ return {inbox: clone(S.inbox), rules: clone(S.rules), periods: clone(S.periods)}; }
-function toastUndo(msg, snap){
-  UNDO = snap; clearTimeout(toastT); clearTimeout(undoT);
+function toastUndo(msg, snap, hid){
+  UNDO = snap; if (snap) snap.hid = hid; clearTimeout(toastT); clearTimeout(undoT);
   $("#toastRoot").innerHTML = `<div class="toast" role="status" style="display:flex;align-items:center;gap:14px">${esc(msg)}<button class="btn sm" data-act="undo" style="background:var(--personal);color:var(--on-personal);min-height:34px">Undo</button></div>`;
   undoT = setTimeout(() => { UNDO = null; $("#toastRoot").innerHTML = ""; }, 8000);
 }
 async function doUndo(){
   const u = UNDO; UNDO = null; clearTimeout(undoT); $("#toastRoot").innerHTML = ""; if (!u) return;
+  const he = u.hid && (S.hist.entries || []).find(x => x.id === u.hid); if (he){ he.undone = true; store.save("history", S.hist); }
   const saves = [];
   for (const p of Object.keys(S.periods)) if (!u.periods[p]){ delete S.periods[p]; saves.push(store.remove("p-" + p)); }
   for (const [p, body] of Object.entries(u.periods)) if (JSON.stringify(body) !== JSON.stringify(S.periods[p])){ S.periods[p] = body; saves.push(savePeriod(p)); }
@@ -1589,9 +1686,44 @@ function denyIds(ids, msg){
   S.inbox.items = S.inbox.items.filter(i => !set.has(i.id));
   S.inbox.denied = [...deniedNow(), ...gone.filter(i => latest && i.date >= latest).map(i => ({...i, deniedAt: Date.now()}))].slice(-300);
   if (S.rsel) gone.forEach(i => S.rsel.delete(i.id));
-  render(); saveInbox(); toastUndo(msg || (gone.length === 1 ? "Denied." : `${gone.length} denied.`), snap);
+  const hid = gone.length ? logHist({kind: "deny", text: `Denied ${gone.length === 1 ? "“" + gone[0].desc + "” (" + money(Math.abs(gone[0].flow)) + ")" : gone.length + " charges"}`, items: gone}) : null;
+  render(); saveInbox(); toastUndo(msg || (gone.length === 1 ? "Denied." : `${gone.length} denied.`), snap, hid);
 }
 function denyItem(id){ denyIds([id], "Denied."); }
+function merchantSheet(desc, orig){
+  const k1 = norm(orig || desc), k2 = norm(desc);
+  const match = t => { const a = norm(t.orig || t.desc), b = norm(t.desc); return (k1 && (a === k1 || b === k1)) || (k2 && (a === k2 || b === k2)); };
+  const rows = []; periodList().forEach(p => (S.periods[p].txns || []).forEach(t => { if (t.fund !== "income" && t.fund !== "savings" && match(t)) rows.push({...t, p}); }));
+  rows.sort((a,b) => b.date.localeCompare(a.date));
+  const year = todayIso().slice(0, 4), yr = rows.filter(r => r.date.startsWith(year)).reduce((a, r) => a + (+r.amount || 0), 0), all = rows.reduce((a, r) => a + (+r.amount || 0), 0);
+  const byP = {}; rows.forEach(r => { byP[r.p] = (byP[r.p] || 0) + (+r.amount || 0); });
+  const pend = S.inbox.items.filter(i => i.status === "pending" && match(i)).length;
+  openSheet(`<h2>${esc(desc)}</h2>
+    <div class="stats" style="margin:4px 0 12px"><div class="stat"><div class="v num">${money0(yr)}</div><div class="k">This year</div></div><div class="stat"><div class="v num">${rows.length}</div><div class="k">Charges</div></div><div class="stat"><div class="v num">${money0(rows.length ? all / Object.keys(byP).length : 0)}</div><div class="k">Per paycheck, avg</div></div></div>
+    ${pend ? `<p class="small muted" style="margin:0 0 8px">Plus ${pend} waiting in Review.</p>` : ""}
+    ${Object.keys(byP).length ? `<h3 style="margin:6px 0">By paycheck</h3><div class="list">${Object.keys(byP).sort().reverse().map(p => `<div class="tx" style="cursor:default"><span class="mid">${esc(short(p))} to ${esc(short(periodEnd(p)))}</span><span class="a num">${money(byP[p])}</span></div>`).join("")}</div>` : ""}
+    <h3 style="margin:14px 0 6px">Every charge</h3>
+    ${rows.length ? `<div class="list">${rows.slice(0, 100).map(txRow).join("")}</div>` : `<p class="muted">None confirmed yet.</p>`}
+    <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn ghost" data-act="close">Close</button></div>`);
+}
+function logMerge(hidden, kept){
+  S.inbox.merges = [{at: Date.now(), hid: hidden.id, hidden: {desc: hidden.desc, date: hidden.date, flow: hidden.flow, src: hidden.src, orig: hidden.orig || hidden.desc}, kept}, ...(S.inbox.merges || [])].slice(0, 200);
+}
+function viewMerges(){
+  const ms = S.inbox.merges || [];
+  return `<div class="topbar"><h1 style="display:flex;align-items:center;gap:12px"><button class="iconbtn" data-tab="review" aria-label="Back to Review">${ICONS.left}</button>Check merges</h1></div>
+  <p class="muted" style="margin:0 0 12px">Each time Payday hid a charge as a duplicate of another one. If a pair looks wrong, bring the hidden one back to Review.</p>
+  ${ms.length ? `<div class="list">${ms.map((m, i) => { const still = S.inbox.items.find(x => x.id === m.hid && x.status === "dup");
+    return `<div style="padding:12px 14px;border-top:1px solid var(--line)">
+      <div class="small muted">${esc(new Date(m.at).toLocaleDateString("en-US", {month:"short", day:"numeric"}))}: hid</div>
+      <div class="row" style="justify-content:space-between;flex-wrap:nowrap"><b style="min-width:0;overflow-wrap:anywhere">${esc(m.hidden.desc)}</b><span class="num">${money(Math.abs(m.hidden.flow))}</span></div>
+      <div class="small muted">${esc(short(m.hidden.date))} • ${esc(SOURCES[m.hidden.src] || m.hidden.src)}</div>
+      <div class="small" style="margin:6px 0 2px">as the same charge as</div>
+      <div class="row" style="justify-content:space-between;flex-wrap:nowrap"><b style="min-width:0;overflow-wrap:anywhere">${esc(m.kept.desc)}</b><span class="num">${money(m.kept.amount)}</span></div>
+      <div class="small muted">${esc(short(m.kept.date))} • ${esc(SOURCES[m.kept.src] || m.kept.src || "")}, ${esc(m.kept.where)}</div>
+      <div class="row" style="margin-top:8px">${still ? `<button class="btn sm" data-act="undup" data-id="${esc(m.hid)}">Not a duplicate, send to Review</button>` : `<button class="btn ghost sm" data-act="merge-revive" data-i="${i}">Wrong pair? Bring it back to Review</button>`}</div>
+    </div>`; }).join("")}</div>` : `<div class="list"><div class="empty">No merges yet.</div></div>`}`;
+}
 function restoreDenied(id){
   const d = (S.inbox.denied || []).find(x => x.id === id); if (!d) return;
   S.inbox.denied = S.inbox.denied.filter(x => x.id !== id);
@@ -1782,13 +1914,14 @@ function addImport(r){
     // already confirmed (spreadsheet, manual, or earlier import)?
     const amt = it.flow < 0 ? -it.flow : it.flow;
     const hitC = confirmed.find(t => !used.has(t.id) && Math.abs(Math.abs(+t.amount) - amt) < 0.005 && within(t.date, it.date, 4) && (t.fund === "income") === (it.flow > 0 && it.fund === "income"));
-    if (hitC && it.fund !== "skip"){ used.add(hitC.id); it.status = "dup"; it.dupNote = `Already in your ${short(hitC.p)} paycheck as “${hitC.desc}” on ${short(hitC.date)}.`; dupCount++; L(raw, "dup", it.dupNote); S.inbox.items.push(it); continue; }
+    if (hitC && it.fund !== "skip"){ logMerge(it, {desc: hitC.desc, date: hitC.date, amount: Math.abs(+hitC.amount), src: hitC.src, where: `confirmed in the ${short(hitC.p)} paycheck`}); used.add(hitC.id); it.status = "dup"; it.dupNote = `Already in your ${short(hitC.p)} paycheck as “${hitC.desc}” on ${short(hitC.date)}.`; dupCount++; L(raw, "dup", it.dupNote); S.inbox.items.push(it); continue; }
     // overlaps with another account still in review?
     const hitI = S.inbox.items.find(o => o.status === "pending" && !used.has(o.id) && o.src !== it.src && Math.abs(o.flow - it.flow) < 0.005 && within(o.date, it.date, 4) && (o.src === "paypal" || it.src === "paypal"));
     if (hitI){
       used.add(hitI.id);
       const pp = hitI.src === "paypal" ? hitI : it, other = pp === it ? hitI : it;
       if (/paypal|pp\*/i.test(other.desc) && !/paypal/i.test(pp.desc)){ other.desc = `${pp.desc} (via PayPal)`; if (other.flow < 0 && isSavingsMove(other)) other.fund = "savings"; }
+      logMerge(pp, {desc: other.desc, date: other.date, amount: Math.abs(other.flow), src: other.src, where: "in Review"});
       pp.status = "dup"; pp.dupNote = `Same charge as “${other.desc}” on ${SOURCES[other.src]||other.src}, ${short(other.date)}.`; dupCount++;
       if (pp === it){ L(raw, "dup", it.dupNote); S.inbox.items.push(it); continue; }
     }
@@ -1901,6 +2034,7 @@ function paycheckSheet(p){
   const line = (label, v, bold, fill) => rows.push([{v: label, bold, fill}, "", "", {v: r2(v), bold, fill}]);
   rows.push([{v: "PAYCHECK", bold: true, fill: "black"}, {v: mdy(p), bold: true}, {v: "PAYCHECK TOTAL", bold: true, fill: "black"}, {v: r2(c.pay), bold: true, fill: "green"}]);
   rows.push(["", "", `${mdy(p)} to ${mdy(periodEnd(p))}`]);
+  if (per.note) rows.push([{v: "NOTES", bold: true}, "", per.note]);
   blank();
   head("PERSONAL", "yellow"); items("personal", ["yellow", "green"]);
   line(`Personal (${pc(st.personalPct)} of paycheck${c.extra ? " + extra income share" : ""})`, c.personalBudget);
@@ -2189,7 +2323,7 @@ function toast(msg){ clearTimeout(toastT); $("#toastRoot").innerHTML = `<div cla
 document.addEventListener("click", async e => {
   const tab = e.target.closest("[data-tab]");
   if (tab){ closeSheet(); go(tab.dataset.tab); return; }
-  if (S.rsel && S.view === "review"){ const art = e.target.closest("article.rv"); if (art && !e.target.closest("button,input,select,a,label")){ const cb = art.querySelector("[data-rsel]"); if (cb){ cb.checked = !cb.checked; cb.dispatchEvent(new Event("change", {bubbles:true})); return; } } }
+  if (S.rsel && S.view === "review"){ const art = e.target.closest("article.rv"); if (art && !e.target.closest("button,input,select,a,label,summary")){ const cb = art.querySelector("[data-rsel],[data-rselg]"); if (cb){ cb.checked = !cb.checked; cb.dispatchEvent(new Event("change", {bubbles:true})); return; } } }
   if (e.target.closest("[data-gadd]")){ const box = $("#g-rows"); const div = document.createElement("div"); box.insertAdjacentHTML("beforeend", `<div class="goal-row" data-gid="${uid()}" style="display:grid;grid-template-columns:1fr 120px auto;gap:8px;align-items:center;margin-bottom:8px"><input class="input" data-g="name" placeholder="Goal, e.g. Car fund" aria-label="Goal name"><input class="input num" data-g="target" inputmode="decimal" placeholder="$ target" aria-label="Target amount"><span class="row" style="gap:4px;flex-wrap:nowrap"><button type="button" class="iconbtn" data-gmove="-1" aria-label="Move up" style="width:34px;height:34px">↑</button><button type="button" class="iconbtn" data-gdel aria-label="Remove goal" style="width:34px;height:34px">✕</button></span></div>`); box.lastElementChild.querySelector("input").focus(); return; }
   if (e.target.closest("[data-gdel]")){ e.target.closest(".goal-row").remove(); return; }
   if (e.target.closest("[data-gmove]")){ const r = e.target.closest(".goal-row"); if (r.previousElementSibling) r.parentElement.insertBefore(r, r.previousElementSibling); return; }
@@ -2209,8 +2343,9 @@ document.addEventListener("click", async e => {
   else if (a === "save-period"){
     const amt = r2(parseAmt($("#p-amt").value)), edit = el.dataset.edit === "1";
     if (!(amt > 0)){ toast("Enter the paycheck amount."); return; }
+    const note = $("#p-note") ? $("#p-note").value.trim() : "";
     if (edit){
-      const p = periodList()[S.pIdx]; S.periods[p].amount = amt;
+      const p = periodList()[S.pIdx]; S.periods[p].amount = amt; if (note) S.periods[p].note = note; else delete S.periods[p].note;
       const cv = $("#p-carry") ? $("#p-carry").value.trim() : "";
       if (cv === "") delete S.periods[p].carryIn;
       else {
@@ -2223,7 +2358,7 @@ document.addEventListener("click", async e => {
     else {
       const d = $("#p-date").value; if (!d){ toast("Pick the paystub date."); return; }
       if (S.periods[d]){ toast("There’s already a paycheck on that date."); return; }
-      S.periods[d] = {kind:"period", date:d, amount:amt, txns:[]};
+      S.periods[d] = {kind:"period", date:d, amount:amt, txns:[]}; if (note) S.periods[d].note = note;
       S.pIdx = periodList().indexOf(d); closeSheet(); render(); savePeriod(d); toast(`Started the ${short(d)} paycheck.`);
     }
   }
@@ -2236,11 +2371,14 @@ document.addEventListener("click", async e => {
     if (!date){ toast("Pick a date."); return; }
     const touched = new Set();
     let t;
-    if (id){ const f = findTx(id); if (!f) return; t = f.t; S.periods[f.p].txns = S.periods[f.p].txns.filter(x => x.id !== id); touched.add(f.p); }
+    let before = null;
+    if (id){ const f = findTx(id); if (!f) return; t = f.t; before = {p: f.p, t: clone(f.t), id}; S.periods[f.p].txns = S.periods[f.p].txns.filter(x => x.id !== id); touched.add(f.p); }
     else t = {id: uid(), src:"manual"};
     const details = $("#t-details").value.trim();
     Object.assign(t, {amount: amt, desc: desc || "Untitled", date, fund, details}); if (!details) delete t.details;
     const p = periodFor(date); (S.periods[p].txns = S.periods[p].txns || []).push(t); touched.add(p);
+    if (before) logHist({kind: "edit", text: `Edited “${t.desc}” (${money(Math.abs(t.amount))})`, before, afterP: p});
+    else logHist({kind: "add", text: `Added “${t.desc}” (${money(Math.abs(t.amount))})`, p, tid: t.id});
     closeSheet(); render(); for (const q of touched) await savePeriod(q); toast(id ? "Saved." : "Added.");
   }
   else if (a === "tx-select"){ S.sel = new Set(); render(); }
@@ -2256,11 +2394,12 @@ document.addEventListener("click", async e => {
   }
   else if (a === "tx-bulk-confirm"){
     const p = periodList()[S.pIdx], per = S.periods[p]; if (!per || !S.sel) { closeSheet(); return; }
-    const n = (per.txns || []).filter(t => S.sel.has(t.id)).length;
+    const gone = (per.txns || []).filter(t => S.sel.has(t.id)), n = gone.length;
+    if (n) logHist({kind: "delete", text: `Deleted ${n} transaction${n===1?"":"s"} from the ${short(p)} paycheck`, list: gone.map(t => ({p, t}))});
     per.txns = (per.txns || []).filter(t => !S.sel.has(t.id));
     S.sel = null; closeSheet(); render(); await savePeriod(p); toast(`${n} deleted.`);
   }
-  else if (a === "del-tx"){ const f = findTx(id); if (!f) return; S.periods[f.p].txns = S.periods[f.p].txns.filter(x => x.id !== id); closeSheet(); render(); savePeriod(f.p); toast("Deleted."); }
+  else if (a === "del-tx"){ const f = findTx(id); if (!f) return; logHist({kind: "delete", text: `Deleted “${f.t.desc}” (${money(Math.abs(f.t.amount))})`, list: [{p: f.p, t: f.t}]}); S.periods[f.p].txns = S.periods[f.p].txns.filter(x => x.id !== id); closeSheet(); render(); savePeriod(f.p); toast("Deleted."); }
   else if (a === "pick"){ const it = S.inbox.items.find(i => i.id === id); if (it){ it.fund = el.dataset.fund; render(); saveInbox(); } }
   else if (a === "confirm") confirmItems([id]);
   else if (a === "confirm-all") confirmItems(pending().map(i => i.id));
@@ -2295,6 +2434,16 @@ document.addEventListener("click", async e => {
   else if (a === "range"){ S.range = el.dataset.r; render(); }
   else if (a === "save-moved") movedSheet();
   else if (a === "goals-edit") goalsSheet();
+  else if (a === "open-history") go("history");
+  else if (a === "open-merges") go("merges");
+  else if (a === "hist-undo") undoHist(id);
+  else if (a === "merchant") merchantSheet(el.dataset.q, el.dataset.o);
+  else if (a === "merge-revive"){ const m = (S.inbox.merges || [])[+el.dataset.i]; if (m){ const it = {id: uid(), fp: hash("revived|" + uid()), src: m.hidden.src, date: m.hidden.date, desc: m.hidden.desc, orig: m.hidden.orig, flow: m.hidden.flow, status: "pending"}; it.fund = suggest(it); S.inbox.items.push(it); saveInbox(); render(); toast("Sent to Review."); } }
+  else if (a === "gexp"){ S.rexp = S.rexp || new Set(); const k = el.dataset.k; S.rexp.has(k) ? S.rexp.delete(k) : S.rexp.add(k); render(); }
+  else if (a === "gpick"){ const ids = el.dataset.ids.split(","); S.inbox.items.forEach(i => { if (ids.includes(i.id)) i.fund = el.dataset.fund; }); render(); saveInbox(); }
+  else if (a === "gconfirm") confirmItems(el.dataset.ids.split(","));
+  else if (a === "gdeny") denyIds(el.dataset.ids.split(","));
+  else if (a === "compact-toggle"){ try{ localStorage.setItem("payday-compact", isCompact() ? "0" : "1"); }catch(_){} render(); }
   else if (a === "whatsnew") whatsNewSheet();
   else if (a === "open-rules") go("rules");
   else if (a === "rule-del"){ ruleSet(el.dataset.t, el.dataset.k, null); render(); toast("Rule deleted."); }
@@ -2417,6 +2566,9 @@ document.addEventListener("click", async e => {
 });
 document.addEventListener("input", e => { if (e.target.id === "gh-repo" || e.target.id === "gh-token") ghRead(); if (e.target.id === "q"){ S.q = e.target.value; $("#qres").innerHTML = searchResults(); } });
 document.addEventListener("change", e => {
+  if (e.target.dataset && e.target.dataset.act === "cpick"){ const it = S.inbox.items.find(i => i.id === e.target.dataset.id); if (it){ it.fund = e.target.value; render(); saveInbox(); } return; }
+  if (e.target.dataset && e.target.dataset.act === "gcpick"){ if (!e.target.value) return; const ids = e.target.dataset.ids.split(","); S.inbox.items.forEach(i => { if (ids.includes(i.id)) i.fund = e.target.value; }); render(); saveInbox(); return; }
+  if (e.target.dataset && e.target.dataset.rselg !== undefined && S.rsel){ e.target.dataset.rselg.split(",").forEach(id => e.target.checked ? S.rsel.add(id) : S.rsel.delete(id)); render(); return; }
   if (e.target.dataset && e.target.dataset.ruleT){
     const t = e.target.dataset.ruleT, k = e.target.dataset.ruleK; let v = e.target.value;
     if (t === "split"){ const n = parseFloat(v); if (!(n > 0 && n <= 100)){ toast("Use a percent from 1 to 100."); return; } v = Math.round(n * 100) / 10000; }
@@ -2470,16 +2622,17 @@ function reviewKey(e){
   if (k === "arrowdown" || k === "j"){ move(1); return true; }
   if (k === "arrowup" || k === "k"){ move(-1); return true; }
   if (!S.kbd){ S.kbd = true; applyRFocus(true); }
-  const id = cards[Math.max(0, Math.min(S.rfoc || 0, cards.length - 1))].dataset.rid, it = S.inbox.items.find(i => i.id === id); if (!it) return false;
-  if (k === "c" || k === "enter"){ confirmItems([id]); return true; }
-  if (k === "d" || k === "delete"){ denyItem(id); return true; }
-  if (k === "e"){ itemSheet(it); return true; }
-  if (k === " " && S.rsel){ S.rsel.has(id) ? S.rsel.delete(id) : S.rsel.add(id); render(); return true; }
+  const card = cards[Math.max(0, Math.min(S.rfoc || 0, cards.length - 1))];
+  const id = card.dataset.rid, ids = card.dataset.gids ? card.dataset.gids.split(",") : [id], it = S.inbox.items.find(i => i.id === id); if (!it) return false;
+  if (k === "c" || k === "enter"){ confirmItems(ids); return true; }
+  if (k === "d" || k === "delete"){ ids.length > 1 ? denyIds(ids) : denyItem(id); return true; }
+  if (k === "e"){ if (card.dataset.gk){ S.rexp = S.rexp || new Set(); S.rexp.add(card.dataset.gk); render(); } else itemSheet(it); return true; }
+  if (k === " " && S.rsel){ const on = !ids.every(x => S.rsel.has(x)); ids.forEach(x => on ? S.rsel.add(x) : S.rsel.delete(x)); render(); return true; }
   const map = {p:"personal", g:"gas", b:"debt", s:"savings", i:"income", f:"personal", y:"paycheck", x:"skip"}, f = map[k];
   if (f){
     const ok = it.flow < 0 ? ["personal","gas","debt","savings","skip"].includes(f) && k !== "f" : ["income","paycheck","personal","skip"].includes(f) && k !== "p";
     if (!ok){ toast(it.flow < 0 ? "That option is for money coming in." : "That option is for charges. Use F for a refund."); return true; }
-    it.fund = f; render(); saveInbox(); return true;
+    S.inbox.items.forEach(i => { if (ids.includes(i.id)) i.fund = f; }); render(); saveInbox(); return true;
   }
   return false;
 }
