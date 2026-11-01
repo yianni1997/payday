@@ -315,8 +315,9 @@ const SOURCES = {
 };
 /* ---------- version ---------- */
 // Bump APP_VERSION (and the cache name in sw.js to match) with every update, and add a line to CHANGES.
-const APP_VERSION = 34, APP_DATE = "2026-11-01";
+const APP_VERSION = 35, APP_DATE = "2026-11-01";
 const CHANGES = [
+  [35, "2026-11-01", "Tags, compare two paychecks, closed paychecks protected, sort and filter Review, import history with undo, month view."],
   [34, "2026-11-01", "Close out a paycheck, match a statement (with monthly reminders), health check, faster manual adds, saved searches."],
   [33, "2026-11-01", "Test update: installed by sharing the zip straight to Payday."],
   [32, "2026-11-01", "Bulk edit confirmed charges, your own categories, search filters, Year in review, share the update zip straight to Payday."],
@@ -543,6 +544,10 @@ function render(){
   else if (S.view === "history") m.innerHTML = viewHistory();
   else if (S.view === "year") m.innerHTML = viewYear();
   else if (S.view === "health") m.innerHTML = viewHealth();
+  else if (S.view === "tags") m.innerHTML = viewTags();
+  else if (S.view === "imports") m.innerHTML = viewImports();
+  else if (S.view === "compare") m.innerHTML = viewCompare();
+  else if (S.view === "month") m.innerHTML = viewMonth();
   else if (S.view === "cats") m.innerHTML = viewCats();
   else if (S.view === "merges") m.innerHTML = viewMerges();
   else m.innerHTML = viewSettings();
@@ -737,11 +742,12 @@ const AMAZON_RE = /amazon|amzn|kindle|audible|prime video|amazon prime/i;
 function searchRows(){
   const q = (S.q || "").trim().toLowerCase(), mode = S.qMode || "amazon";
   const rows = [];
-  periodList().forEach(p => (S.periods[p].txns || []).forEach(t => rows.push({kind:"tx", p, id:t.id, date:t.date, desc:t.desc, orig:t.orig || "", details:t.details || "", amount: t.fund === "income" ? +t.amount : -(+t.amount), fund:t.fund, src:t.src, amz:t.amz, cat: category(t)})));
-  S.inbox.items.filter(i => i.status === "pending").forEach(i => rows.push({kind:"rv", p: periodFor(i.date), id:i.id, date:i.date, desc:i.desc, orig:i.orig || "", details:i.details || "", amount:i.flow, fund:i.fund, src:i.src, amz:i.amz, cat: category(i)}));
+  periodList().forEach(p => (S.periods[p].txns || []).forEach(t => rows.push({kind:"tx", p, id:t.id, date:t.date, desc:t.desc, orig:t.orig || "", details:t.details || "", amount: t.fund === "income" ? +t.amount : -(+t.amount), fund:t.fund, src:t.src, amz:t.amz, cat: category(t), tags: t.tags || []})));
+  S.inbox.items.filter(i => i.status === "pending").forEach(i => rows.push({kind:"rv", p: periodFor(i.date), id:i.id, date:i.date, desc:i.desc, orig:i.orig || "", details:i.details || "", amount:i.flow, fund:i.fund, src:i.src, amz:i.amz, cat: category(i), tags: i.tags || []}));
   const F = S.qf || {};
   return rows.filter(r => {
-    const text = (r.desc + " " + r.orig + " " + r.details).toLowerCase();
+    const text = (r.desc + " " + r.orig + " " + r.details + " " + (r.tags || []).map(g => "#" + g).join(" ")).toLowerCase();
+    if (F.tag && !(r.tags || []).includes(F.tag)) return false;
     if ((mode === "amazon" || mode === "amazon-unlabeled") && !AMAZON_RE.test(r.desc + " " + r.orig)) return false;
     // Spreadsheet entries like "amazon license plate bulbs" already say what the item was.
     if (mode === "amazon-unlabeled" && (r.details || (r.src === "sheet" && r.desc.replace(AMAZON_RE, "").replace(/[^a-z]/gi, "").length > 2))) return false;
@@ -788,6 +794,7 @@ function filterPanel(){
       <label class="field"><span>Fund</span><select class="input" data-qf="fund">${opt([["","Any"],["personal","Personal"],["gas","Gas"],["debt","Debt"],["income","Extra income"],["savings","Moved to savings"],["skip","Skip"]], F.fund)}</select></label>
       <label class="field"><span>Account</span><select class="input" data-qf="src">${opt([["","Any"], ...Object.entries(SOURCES)], F.src)}</select></label>
       <label class="field"><span>Category</span><select class="input" data-qf="cat">${opt([["","Any"], ...allCategories().map(c => [c, catName(c)])], F.cat)}</select></label>
+      <label class="field"><span>Tag</span><select class="input" data-qf="tag">${opt([["","Any"], ...allTags().map(g => [g, "#" + g])], F.tag)}</select></label>
       <label class="field"><span>Where</span><select class="input" data-qf="where">${opt([["","Anywhere"],["confirmed","Confirmed"],["review","In Review"]], F.where)}</select></label>
       <label class="field"><span>Amount at least</span><input class="input num" inputmode="decimal" data-qf="min" value="${esc(F.min || "")}" placeholder="$"></label>
       <label class="field"><span>Amount at most</span><input class="input num" inputmode="decimal" data-qf="max" value="${esc(F.max || "")}" placeholder="$"></label>
@@ -880,6 +887,7 @@ function viewHome(){
     </div>
   </div>
   ${latest && plaidUrl() ? `<button class="banner" data-act="home-pull" ${PL.busy ? "disabled" : ""}><span class="dot" style="background:var(--personal);border:1.5px solid var(--ink)"></span><span><b>${PL.busy ? `<span class="spinner"></span> ${esc(PL.busy)}` : "Pull new charges from my bank"}</b><span class="small muted">${PL.err ? esc(PL.err) : "Everything for this paycheck goes to Review"}</span></span><span class="go">${PL.busy ? "" : "Pull"}</span></button>${PL.last && !PL.busy ? `<div style="margin:-6px 0 12px;text-align:right"><button class="btn ghost sm" data-act="pull-results">See what the last pull found</button></div>` : ""}` : ""}
+  <div class="seg" style="margin:-4px 0 12px"><button aria-pressed="true">Paycheck</button><button data-act="view-month" aria-pressed="false">Month</button></div>
   ${per.note ? `<button class="banner" data-act="edit-pay" style="background:var(--sunk)"><span>📝</span><span style="white-space:pre-wrap">${esc(per.note)}</span><span class="go small">Edit</span></button>` : ""}
   ${banners.join("")}
   <div class="home-grid">
@@ -913,6 +921,7 @@ function viewHome(){
       <div class="row" style="gap:8px;margin:-4px 0 12px">
         <select class="input" data-act="tx-bulk-fund" style="width:auto;min-height:38px;padding:6px 10px" ${S.sel.size?"":"disabled"} aria-label="Change fund"><option value="">Change fund…</option>${[["personal","Personal"],["gas","Gas"],["debt","Debt"],["income","Extra income"],["savings","Moved to savings"]].map(([v,l]) => `<option value="${v}">${l}</option>`).join("")}</select>
         <select class="input" data-act="tx-bulk-cat" style="width:auto;min-height:38px;padding:6px 10px" ${S.sel.size?"":"disabled"} aria-label="Change category"><option value="">Change category…</option><option value="__auto">Automatic</option>${allCategories().map(c => `<option value="${esc(c)}">${esc(catName(c))}</option>`).join("")}</select>
+        <button class="btn ghost sm" data-act="tx-bulk-tag" ${S.sel.size?"":"disabled"}>Add a tag</button>
         <select class="input" data-act="tx-bulk-move" style="width:auto;min-height:38px;padding:6px 10px" ${S.sel.size?"":"disabled"} aria-label="Move to paycheck"><option value="">Move to paycheck…</option>${periodList().slice().reverse().filter(q => q !== p).map(q => `<option value="${q}">${short(q)} to ${short(periodEnd(q))}</option>`).join("")}</select>
       </div>` : ""}
       ${txHtml}
@@ -928,7 +937,7 @@ function txRow(t){
   const cat = category(t), f = FUNDS[t.fund] || FUNDS.personal;
   const inc = t.fund === "income";
   const sel = S.sel, on = sel && sel.has(t.id);
-  return `<button class="tx${on?" sel":""}" data-act="${sel?"tx-toggle":"edit-tx"}" data-id="${esc(t.id)}" ${sel?`role="checkbox" aria-checked="${!!on}"`:""}>${sel?`<span class="ck" aria-hidden="true">${on?"✓":""}</span>`:""}<span class="av" style="background:${f.color}">${esc((t.desc||"?").trim().charAt(0).toUpperCase())}</span><span class="mid"><span class="d" style="display:block">${esc(t.desc||"Untitled")}</span><span class="c">${t.details?esc(t.details)+" • ":""}${esc(cat)}${t.fund!=="personal"&&!inc?" • "+f.label+" fund":""}${t.src&&t.src!=="sheet"&&t.src!=="manual"?" • "+esc(SOURCES[t.src]||t.src):""}</span></span><span class="a num ${inc||t.amount<0?"inc":""}">${inc?money(t.amount,{sign:true}):t.amount<0?"+"+money(-t.amount):money(t.amount)}</span></button>`;
+  return `<button class="tx${on?" sel":""}" data-act="${sel?"tx-toggle":"edit-tx"}" data-id="${esc(t.id)}" ${sel?`role="checkbox" aria-checked="${!!on}"`:""}>${sel?`<span class="ck" aria-hidden="true">${on?"✓":""}</span>`:""}<span class="av" style="background:${f.color}">${esc((t.desc||"?").trim().charAt(0).toUpperCase())}</span><span class="mid"><span class="d" style="display:block">${esc(t.desc||"Untitled")}</span><span class="c">${(t.tags||[]).length ? (t.tags.map(g => "#" + esc(g)).join(" ") + " • ") : ""}${t.details?esc(t.details)+" • ":""}${esc(cat)}${t.fund!=="personal"&&!inc?" • "+f.label+" fund":""}${t.src&&t.src!=="sheet"&&t.src!=="manual"?" • "+esc(SOURCES[t.src]||t.src):""}</span></span><span class="a num ${inc||t.amount<0?"inc":""}">${inc?money(t.amount,{sign:true}):t.amount<0?"+"+money(-t.amount):money(t.amount)}</span></button>`;
 }
 
 /* ---------- review ---------- */
@@ -989,9 +998,9 @@ function groupCard(g, gk, compact){
 }
 function viewReview(){
   fixWaitingDirections(); amzScrub();
-  const items = pending().sort((a,b) => b.date.localeCompare(a.date));
+  const items = visibleReview();
   const dups = S.inbox.items.filter(i => i.status === "dup");
-  const multi = new Set(items.map(i => periodFor(i.date))).size > 1, latestP = periodList().slice(-1)[0];
+  const multi = (S.rsort || "new") === "new" && new Set(items.map(i => periodFor(i.date))).size > 1, latestP = periodList().slice(-1)[0];
   const head = `<div class="topbar"><h1>Review</h1><button class="btn ghost sm desk-only" data-act="compact-toggle">${isCompact() ? "Roomy view" : "Compact view"}</button></div>${items.length ? `<p class="small muted kbd-hint" style="margin:-8px 0 12px">Keyboard: ↑ ↓ move, C confirm, D deny, E edit (or open a group), U undo. Pick a fund: P Personal, G Gas, B Debt, S Savings, I Extra income, F Refund, Y Paycheck, X Skip. Space selects in Select mode.</p>` : ""}`;
   const den = deniedNow().sort((a,b) => b.date.localeCompare(a.date));
   const deniedHtml = den.length ? `<details class="dups"><summary>Denied this paycheck (${den.length})</summary>${den.map(it => `<article class="rv"><div class="top"><div class="mid"><div class="desc">${esc(it.desc)}</div><div class="meta">${esc(short(it.date))} • <span class="chip">${esc(SOURCES[it.src]||it.src)}</span></div></div><div class="amt num ${it.flow>0?"in":""}">${it.flow>0?"+"+money(it.flow):money(-it.flow)}</div></div><div class="acts" style="margin-top:10px"><button class="btn sm" data-act="restore-denied" data-id="${esc(it.id)}">Restore to Review</button></div></article>`).join("")}</details>` : "";
@@ -1003,7 +1012,7 @@ function viewReview(){
   const body = items.map((it, ix) => {
     const pIn = periodFor(it.date), gk = gkey(it), grp = groups[gk];
     const hdr = multi && (ix === 0 || periodFor(items[ix-1].date) !== pIn) ? `<h3 style="margin:${ix?22:4}px 0 8px">${pIn === latestP ? "This paycheck" : "Past paycheck"}: ${esc(short(pIn))} to ${esc(short(minIso(periodEnd(pIn), todayIso())))} <span class="muted small">(${items.filter(x => periodFor(x.date) === pIn).length})</span>${S.rsel ? ` <button class="btn ghost sm" style="min-height:30px;padding:3px 10px;margin-left:6px" data-act="rsel-period" data-p="${esc(pIn)}">Select these</button>` : ""}</h3>` : "";
-    const where = it.fund === "paycheck" ? `Starts a new paycheck on ${short(it.date)}` : it.fund === "skip" ? "Won’t be counted" : pIn ? `Goes in the ${short(pIn)} paycheck` : "";
+    const where = it.fund === "paycheck" ? `Starts a new paycheck on ${short(it.date)}` : it.fund === "skip" ? "Won’t be counted" : pIn ? `Goes in the ${short(pIn)} paycheck${S.periods[pIn] && S.periods[pIn].closed ? " (closed)" : ""}` : "";
     const picked = S.rsel && S.rsel.has(it.id);
     if (grp.length > 1 && !(S.rexp && S.rexp.has(gk))){ if (emitted.has(gk)) return ""; emitted.add(gk); return hdr + groupCard(grp, gk, compact); }
     const ghead = grp.length > 1 && grp[0] === it ? `<div class="row" style="justify-content:space-between;margin:6px 0"><b class="small">${esc(it.desc)} ×${grp.length}, ${esc(short(it.date))}</b><button class="btn ghost sm" data-act="gexp" data-k="${esc(gk)}">Group them again</button></div>` : "";
@@ -1025,7 +1034,7 @@ function viewReview(){
       <div class="row" style="justify-content:space-between;margin-bottom:8px"><b>${n} selected</b><span class="row"><button class="btn ghost sm" data-act="rsel-all">${n === items.length ? "Clear" : "Select all " + items.length}</button><button class="btn ghost sm" data-act="rsel-done">Done</button></span></div>
       <div class="row"><select class="input" data-act="rsel-set" style="width:auto;min-height:38px;padding:6px 10px" ${n ? "" : "disabled"} aria-label="Set where the selected charges go">${setOpts}</select><button class="btn sm" data-act="rsel-confirm" ${n ? "" : "disabled"}>Confirm ${n || ""}</button><button class="btn danger sm" data-act="rsel-deny" ${n ? "" : "disabled"}>Deny ${n || ""}</button></div>
     </div>` : `<div class="bulk"><span class="muted">${items.length} to review. The pre-selected choice is my best guess, and it learns from what you pick.</span><span class="row" style="gap:8px"><button class="btn ghost" data-act="rsel-start">Select</button><button class="btn yellow" data-act="confirm-all">Confirm all ${items.length}</button><button class="btn danger" data-act="deny-all">Deny all ${items.length}</button></span></div>`;
-  return head + bar + body + dupHtml + deniedHtml;
+  return head + reviewControls() + bar + body + dupHtml + deniedHtml;
 }
 
 /* ---------- import ---------- */
@@ -1039,6 +1048,7 @@ function viewImport(){
   <div class="seg">${srcBtns}</div>
   <label class="drop" id="drop"><input type="file" id="fileIn" multiple accept="${accept}"><b>Choose statement files</b><span class="muted">CSV works best. PDF statements are read too, but check those amounts in Review.</span></label>
   ${imps}
+  ${(S.inbox.importLog || []).length ? `<p style="margin:14px 0 0"><button class="btn ghost sm" data-act="open-imports">Import history (${S.inbox.importLog.length})</button></p>` : ""}
   <div class="help">
     <details><summary>Chase checking or Chase Amazon card</summary><p>On chase.com, open the account, choose Download account activity, pick CSV and the date range. The app also reads the monthly PDF statement.</p></details>
     <details><summary>PayPal activity</summary><p>On paypal.com go to Activity, then Statements, then Activity download (the exact menu name can vary). Choose CSV. Purchases that also show on a card or Chase are matched and hidden as duplicates automatically.</p></details>
@@ -1093,7 +1103,7 @@ function viewTrends(){
   const cmax = Math.max(1, ...cats.map(c=>c[1]));
   const tops = Object.entries(merch).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]).slice(0,8);
   const rng = [["3","3 paychecks"],["6","6"],["12","12"],["all","All"]].map(([k,l]) => `<button data-act="range" data-r="${k}" aria-pressed="${S.range===k}">${l}</button>`).join("");
-  return `<div class="topbar"><h1>Trends</h1><button class="btn ghost sm" data-act="open-year">Year in review</button></div>
+  return `<div class="topbar"><h1>Trends</h1><span class="row" style="gap:6px"><button class="btn ghost sm" data-act="open-compare">Compare paychecks</button><button class="btn ghost sm" data-act="open-year">Year in review</button></span></div>
   <div class="seg">${rng}</div>
   <div class="stats">
     <div class="stat"><div class="v num" style="color:var(--pos)">${money0(saved)}</div><div class="k">Saved</div></div>
@@ -1173,7 +1183,7 @@ function viewSettings(){
       <label class="btn ghost" style="display:inline-flex;align-items:center;cursor:pointer">Restore from backup<input type="file" id="restoreIn" accept="*/*" style="position:absolute;width:1px;height:1px;opacity:0"></label>
     </div>
     <p class="small muted" style="margin:12px 0 0">A backup is one file. Keep a copy in Google Drive or email it to yourself. To move your data to another phone or computer, back up here and restore it there.</p>
-    <div class="row" style="margin-top:12px"><button class="btn ghost" data-act="open-rules">Your rules (${ruleCount()})</button><button class="btn ghost" data-act="open-cats">Your categories</button><button class="btn ghost" data-act="recon-open">Match a statement</button><button class="btn ghost" data-act="open-health">Health check${(() => { const n = healthIssues().length; return n ? ` (${n})` : ""; })()}</button><button class="btn ghost" data-act="open-history">Change history</button><button class="btn ghost" data-act="open-merges">Check merges</button><button class="btn ghost" data-act="xlsx-open">Export like my spreadsheet (.xlsx)</button><button class="btn ghost" data-act="export">Export to spreadsheet (CSV)</button>${nRules?'<button class="btn ghost" data-act="clear-rules">Forget learned merchants</button>':""}</div>
+    <div class="row" style="margin-top:12px"><button class="btn ghost" data-act="open-rules">Your rules (${ruleCount()})</button><button class="btn ghost" data-act="open-cats">Your categories</button><button class="btn ghost" data-act="open-tags">Tags</button><button class="btn ghost" data-act="recon-open">Match a statement</button><button class="btn ghost" data-act="open-health">Health check${(() => { const n = healthIssues().length; return n ? ` (${n})` : ""; })()}</button><button class="btn ghost" data-act="open-history">Change history</button><button class="btn ghost" data-act="open-merges">Check merges</button><button class="btn ghost" data-act="xlsx-open">Export like my spreadsheet (.xlsx)</button><button class="btn ghost" data-act="export">Export to spreadsheet (CSV)</button>${nRules?'<button class="btn ghost" data-act="clear-rules">Forget learned merchants</button>':""}</div>
   </div>
   <div class="panel"><h2 style="margin-bottom:6px">Appearance</h2>
     <div class="seg">${[["auto","Match phone"],["light","Light"],["dark","Dark"]].map(([k,l]) => `<button data-act="theme" data-t="${k}" aria-pressed="${(document.documentElement.dataset.theme||"auto")===k}">${l}</button>`).join("")}</div>
@@ -1482,6 +1492,7 @@ function txSheet(t){
     <label class="field"><span>What was it?</span><input class="input" id="t-desc" value="${esc(t.desc)}" placeholder="Where it was charged" ${isNew ? `list="merchant-list" data-new="1" autocomplete="off"` : ""}>${isNew ? `<datalist id="merchant-list">${merchantIndex().slice(0, 200).map(e => `<option value="${esc(e.desc)}">`).join("")}</datalist><small id="t-fillnote"></small>` : ""}</label>
     <label class="field"><span>Details</span><input class="input" id="t-details" value="${esc(t.details||"")}" placeholder="What it was for, who it was with…"></label>
     <label class="field"><span>Category</span>${catSelect("t-cat", t.cat || "")}</label>
+    <label class="field"><span>Tags</span>${tagInput("t-tags", t.tags)}</label>
     <label class="field"><span>Date</span><input class="input" type="date" id="t-date" value="${t.date}"></label>
     <div class="field"><span>Which fund</span>${fundPicker(t.fund, ["personal","gas","debt","income","savings"])}</div>
     <div class="row" style="justify-content:space-between;margin-top:6px">
@@ -1513,6 +1524,7 @@ function itemSheet(it){
     <label class="field"><span>Details</span><input class="input" id="i-details" value="${esc(it.details||"")}" placeholder="What it was for, who it was with…"></label>
     <label class="field"><span>Date</span><input class="input" type="date" id="i-date" value="${it.date}"></label>
     <label class="field"><span>Category</span>${catSelect("i-cat", it.cat || "")}</label>
+    <label class="field"><span>Tags</span>${tagInput("i-tags", it.tags)}</label>
     <div class="field"><span>Money</span><div class="seg" id="i-dir"><button type="button" data-pickd="out" aria-pressed="${it.flow < 0}">Charge (money out)</button><button type="button" data-pickd="in" aria-pressed="${it.flow > 0}">Money in</button></div></div>
     <label class="field"><span>Amount that counts for you</span><input class="input num" id="i-amt" inputmode="decimal" value="${Math.abs(it.flow).toFixed(2)}"><small>The bank charged ${money(Math.abs(bank))}. Split a bill? Enter just your part.</small></label>
     <div class="row" style="margin:-6px 0 14px"><button type="button" class="btn ghost sm" data-share="0.5">Half: ${money(Math.abs(bank)/2)}</button><button type="button" class="btn ghost sm" data-share="1">All: ${money(Math.abs(bank))}</button></div>
@@ -1827,6 +1839,114 @@ function savedSearchChips(){
   return `<div class="row" style="gap:6px;margin:0 0 10px">${ss.map((x, i) => `<span class="row" style="gap:0;flex-wrap:nowrap"><button class="btn ghost sm" data-act="ss-use" data-i="${i}" style="border-radius:999px 0 0 999px;min-height:34px">🔖 ${esc(x.name)}</button><button class="btn ghost sm" data-act="ss-del" data-i="${i}" aria-label="Delete saved search ${esc(x.name)}" style="border-radius:0 999px 999px 0;min-height:34px;border-left:0;padding:4px 10px">✕</button></span>`).join("")}${active ? `<button class="btn ghost sm" data-act="ss-save" style="min-height:34px">Save this search</button>` : ""}</div>`;
 }
 
+
+/* ---------- tags ---------- */
+const parseTags = v => [...new Set(String(v || "").split(",").map(x => x.trim().replace(/^#/, "")).filter(Boolean))].slice(0, 10);
+function allTags(){
+  const set = new Set(); periodList().forEach(p => (S.periods[p].txns || []).forEach(t => (t.tags || []).forEach(g => set.add(g)))); S.inbox.items.forEach(i => (i.tags || []).forEach(g => set.add(g)));
+  return [...set].sort((a,b) => a.localeCompare(b));
+}
+function tagInput(id, tags){
+  const all = allTags();
+  return `<input class="input" id="${id}" value="${esc((tags || []).join(", "))}" placeholder="e.g. Mexico trip, Car repair" list="${id}-list" autocomplete="off"><datalist id="${id}-list">${all.map(g => `<option value="${esc(g)}">`).join("")}</datalist><small>Separate tags with commas.${all.length ? " Used before: " + esc(all.slice(0, 6).join(", ")) + (all.length > 6 ? "…" : "") : ""}</small>`;
+}
+function viewTags(){
+  const m = {}; periodList().forEach(p => (S.periods[p].txns || []).forEach(t => (t.tags || []).forEach(g => { m[g] = m[g] || {n: 0, spent: 0, from: t.date, to: t.date}; m[g].n++; if (t.fund !== "income" && t.fund !== "savings") m[g].spent += +t.amount || 0; if (t.date < m[g].from) m[g].from = t.date; if (t.date > m[g].to) m[g].to = t.date; })));
+  const tags = Object.entries(m).sort((a,b) => b[1].spent - a[1].spent);
+  return `<div class="topbar"><h1 style="display:flex;align-items:center;gap:12px"><button class="iconbtn" data-tab="settings" aria-label="Back to Settings">${ICONS.left}</button>Tags</h1></div>
+  <p class="muted" style="margin:0 0 12px">Add tags when you edit a charge, or to several at once with Select on the Paycheck screen. Tap a tag to see its charges.</p>
+  ${tags.length ? `<div class="list">${tags.map(([g, x]) => `<button class="tx" data-act="tag-open" data-g="${esc(g)}"><span class="mid"><span class="d" style="display:block">#${esc(g)}</span><span class="c">${x.n} charge${x.n===1?"":"s"}, ${esc(short(x.from))}${x.from !== x.to ? " to " + esc(short(x.to)) : ""}</span></span><span class="a num">${money(x.spent)}</span></button>`).join("")}</div>` : `<div class="list"><div class="empty">No tags yet.</div></div>`}`;
+}
+
+/* ---------- review sorting and account filter ---------- */
+function visibleReview(){
+  let items = pending();
+  if (S.rsrc) items = items.filter(i => i.src === S.rsrc);
+  const sort = S.rsort || "new", amt = i => Math.abs(i.flow);
+  return items.sort(sort === "old" ? (a,b) => a.date.localeCompare(b.date) : sort === "big" ? (a,b) => amt(b) - amt(a) : sort === "small" ? (a,b) => amt(a) - amt(b) : (a,b) => b.date.localeCompare(a.date));
+}
+function reviewControls(){
+  const all = pending(); if (all.length < 2 && !S.rsrc) return "";
+  const srcs = [...new Set(all.map(i => i.src))];
+  const opt = (list, val) => list.map(([v,l]) => `<option value="${esc(v)}" ${v===(val||"")?"selected":""}>${esc(l)}</option>`).join("");
+  return `<div class="row" style="gap:8px;margin:0 0 10px">
+    <select class="input" data-act="rsort" style="width:auto;min-height:38px;padding:6px 10px" aria-label="Sort">${opt([["new","Newest first"],["old","Oldest first"],["big","Biggest first"],["small","Smallest first"]], S.rsort || "new")}</select>
+    <select class="input" data-act="rsrc" style="width:auto;min-height:38px;padding:6px 10px" aria-label="Account">${opt([["","All accounts (" + all.length + ")"], ...srcs.map(k => [k, `${SOURCES[k] || k} (${all.filter(i => i.src === k).length})`])], S.rsrc || "")}</select>
+  </div>`;
+}
+
+/* ---------- closed paychecks are protected ---------- */
+function isClosed(p){ return !!(p && S.periods[p] && S.periods[p].closed) && S.unlocked !== p; }
+function closedGuard(p, act){
+  openSheet(`<h2>This paycheck is closed</h2><p class="muted">You closed out the ${esc(short(p))} paycheck. Change it anyway? It stays unlocked until you leave the app.</p>
+    <div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="unlock-ok" data-p="${p}" data-then="${esc(JSON.stringify(act))}">Change it anyway</button></div>`);
+}
+
+/* ---------- import history ---------- */
+function viewImports(){
+  const log = S.inbox.importLog || [];
+  return `<div class="topbar"><h1 style="display:flex;align-items:center;gap:12px"><button class="iconbtn" data-tab="import" aria-label="Back to Import">${ICONS.left}</button>Import history</h1></div>
+  <p class="muted" style="margin:0 0 12px">Every pull and statement import. Undo removes what’s still in Review from that import, and lets you import it again. Charges you already confirmed stay.</p>
+  ${log.length ? `<div class="list">${log.map(x => { const left = S.inbox.items.filter(i => i.imp === x.id && (i.status === "pending" || i.status === "dup")).length;
+    return `<div style="padding:12px 14px;border-top:1px solid var(--line)"><div class="row" style="justify-content:space-between;flex-wrap:nowrap"><b>${esc(x.name)}</b><span class="small muted">${esc(new Date(x.at).toLocaleString("en-US", {month:"short", day:"numeric", hour:"numeric", minute:"2-digit"}))}</span></div>
+      <div class="small muted">${x.total} from the file or bank: ${x.added} to Review${x.dups ? `, ${x.dups} duplicates` : ""}${x.skipped ? `, ${x.skipped} already imported` : ""}${x.paid ? `, ${x.paid} payments left out` : ""}${x.outside ? `, ${x.outside} outside the paycheck` : ""}${x.undone ? ". Undone." : ""}</div>
+      ${!x.undone && left ? `<button class="btn ghost sm" style="margin-top:8px" data-act="imp-undo" data-id="${esc(x.id)}">Undo this import (${left} still in Review)</button>` : !x.undone ? `<div class="small muted" style="margin-top:6px">Nothing from this import is left in Review.</div>` : ""}</div>`; }).join("")}</div>` : `<div class="list"><div class="empty">No imports yet.</div></div>`}`;
+}
+function undoImport(id){
+  const x = (S.inbox.importLog || []).find(z => z.id === id); if (!x) return;
+  const gone = S.inbox.items.filter(i => i.imp === id && (i.status === "pending" || i.status === "dup"));
+  const fps = new Set(gone.map(i => i.fp));
+  S.inbox.items = S.inbox.items.filter(i => !gone.includes(i));
+  S.inbox.seen = (S.inbox.seen || []).filter(f => !fps.has(f));
+  x.undone = true; render(); saveInbox(); toast(`Removed ${gone.length} from Review. You can import that file again.`);
+}
+
+/* ---------- compare two paychecks ---------- */
+function viewCompare(){
+  const list = periodList(); if (list.length < 2) return `<div class="topbar"><h1>Compare</h1></div><p class="muted">You need at least two paychecks.</p>`;
+  const A = S.cmpA && list.includes(S.cmpA) ? S.cmpA : list[list.length - 2], B = S.cmpB && list.includes(S.cmpB) ? S.cmpB : list[list.length - 1];
+  const sum = p => { const c = calc(p), cats = {}, places = {}; (S.periods[p].txns || []).forEach(t => { if (t.fund === "income" || t.fund === "savings") return; const k = category(t); cats[k] = (cats[k] || 0) + (+t.amount || 0); const m = t.desc; places[m] = (places[m] || 0) + (+t.amount || 0); }); return {c, cats, places}; };
+  const a = sum(A), b = sum(B);
+  const sel = (id, val) => `<select class="input" data-act="${id}" style="min-height:40px">${list.slice().reverse().map(p => `<option value="${p}" ${p===val?"selected":""}>${short(p)} to ${short(periodEnd(p))}</option>`).join("")}</select>`;
+  // d is the change from the first paycheck to the second. Green is good, red is bad.
+  const diffCell = (d, upIsGood) => { const bad = upIsGood ? d < -0.004 : d > 0.004, good = upIsGood ? d > 0.004 : d < -0.004; return `<span class="num" style="color:${bad ? "var(--neg)" : good ? "var(--pos)" : "var(--muted)"}">${d > 0.004 ? "+" : d < -0.004 ? "−" : ""}${money(Math.abs(d))}</span>`; };
+  const row = (label, x, y, invert) => `<div style="display:grid;grid-template-columns:1fr 90px 90px 90px;gap:8px;padding:8px 14px;border-top:1px solid var(--line);align-items:center"><span style="min-width:0;overflow-wrap:anywhere">${esc(label)}</span><span class="num" style="text-align:right">${money(x)}</span><span class="num" style="text-align:right">${money(y)}</span><span style="text-align:right">${diffCell(y - x, invert)}</span></div>`;
+  const head = `<div style="display:grid;grid-template-columns:1fr 90px 90px 90px;gap:8px;padding:8px 14px" class="small muted"><span></span><span style="text-align:right">${esc(short(A))}</span><span style="text-align:right">${esc(short(B))}</span><span style="text-align:right">Change</span></div>`;
+  const cats = [...new Set([...Object.keys(a.cats), ...Object.keys(b.cats)])].sort((x, y) => Math.abs((b.cats[y]||0) - (a.cats[y]||0)) - Math.abs((b.cats[x]||0) - (a.cats[x]||0)));
+  const places = [...new Set([...Object.keys(a.places), ...Object.keys(b.places)])].map(k => [k, (b.places[k]||0) - (a.places[k]||0)]).sort((x, y) => Math.abs(y[1]) - Math.abs(x[1])).slice(0, 8);
+  return `<div class="topbar"><h1 style="display:flex;align-items:center;gap:12px"><button class="iconbtn" data-tab="trends" aria-label="Back to Trends">${ICONS.left}</button>Compare paychecks</h1></div>
+  <div class="grid2">${sel("cmp-a", A)}${sel("cmp-b", B)}</div>
+  <div class="panel" style="padding:0;overflow:hidden"><div class="tablewrap">${head}
+    ${row("Personal spent", a.c.personalSpent, b.c.personalSpent)}${row("Gas", a.c.gasSpent, b.c.gasSpent)}${row("Debt paid", a.c.debtSpent, b.c.debtSpent)}${row("Extra income", a.c.extra, b.c.extra, true)}${row("Moved to savings", a.c.savingsMoved, b.c.savingsMoved, true)}${row("Personal left", a.c.personalLeft, b.c.personalLeft, true)}</div></div>
+  <div class="panel" style="padding:0;overflow:hidden"><h3 style="padding:12px 14px 0">By category</h3><div class="tablewrap">${head}${cats.map(k => row(k, a.cats[k] || 0, b.cats[k] || 0)).join("") || '<p class="muted" style="padding:0 14px 12px">Nothing yet.</p>'}</div></div>
+  <div class="panel"><h3 style="margin-bottom:8px">Biggest changes by place</h3>${places.map(([k, d]) => `<div class="cat" style="grid-template-columns:1fr auto"><span>${esc(k)}</span>${diffCell(d)}</div>`).join("") || '<p class="muted">Nothing yet.</p>'}
+    <p class="small muted" style="margin:8px 0 0">Change is from the ${esc(short(A))} paycheck to the ${esc(short(B))} paycheck. Green is better (less spent, more saved or earned), red is worse.</p></div>`;
+}
+
+/* ---------- calendar-month view ---------- */
+function viewMonth(){
+  const months = [...new Set(periodList().flatMap(p => (S.periods[p].txns || []).map(t => t.date.slice(0, 7))))].sort();
+  const cur = todayIso().slice(0, 7);
+  if (!months.includes(cur)) months.push(cur);
+  const m = S.month && months.includes(S.month) ? S.month : cur, i = months.indexOf(m);
+  const tx = []; periodList().forEach(p => (S.periods[p].txns || []).forEach(t => { if (t.date.startsWith(m)) tx.push({...t, p}); }));
+  const sumF = f => r2(tx.filter(t => t.fund === f).reduce((a, t) => a + (+t.amount || 0), 0));
+  const spent = r2(sumF("personal") + sumF("gas") + sumF("debt"));
+  const cats = {}, accts = {}; tx.forEach(t => { if (t.fund === "income" || t.fund === "savings") return; const k = category(t); cats[k] = (cats[k] || 0) + (+t.amount || 0); if (t.src && t.src !== "sheet" && t.src !== "manual"){ accts[t.src] = (accts[t.src] || 0) + +(t.bank !== undefined ? t.bank : t.amount); } });
+  const cl = Object.entries(cats).filter(([,v]) => v > 0).sort((a,b) => b[1]-a[1]), cmax = Math.max(1, ...cl.map(c => c[1]));
+  const byDay = {}; tx.slice().sort((a,b) => b.date.localeCompare(a.date)).forEach(t => (byDay[t.date] = byDay[t.date] || []).push(t));
+  return `<div class="topbar home"><h1>Month</h1><div class="period-nav">
+      <button class="iconbtn" data-act="month-prev" ${i <= 0 ? "disabled" : ""} aria-label="Previous month">${ICONS.left}</button>
+      <div class="period-label">${esc(monthName(m))}<small>${tx.length} item${tx.length===1?"":"s"}</small></div>
+      <button class="iconbtn" data-act="month-next" ${i >= months.length - 1 ? "disabled" : ""} aria-label="Next month">${ICONS.right}</button></div></div>
+  <div class="seg" style="margin-bottom:12px"><button data-act="view-paycheck" aria-pressed="false">Paycheck</button><button aria-pressed="true">Month</button></div>
+  <div class="stats"><div class="stat"><div class="v num">${money0(spent)}</div><div class="k">Spent</div></div><div class="stat"><div class="v num">${money0(sumF("income"))}</div><div class="k">Extra income</div></div><div class="stat"><div class="v num" style="color:var(--pos)">${money0(sumF("savings"))}</div><div class="k">To savings</div></div></div>
+  <div class="panel"><div class="small muted">Personal ${money(sumF("personal"))} • Gas ${money(sumF("gas"))} • Debt ${money(sumF("debt"))}</div></div>
+  ${Object.keys(accts).length ? `<div class="panel"><h3 style="margin-bottom:6px">By account</h3><p class="small muted" style="margin:0 0 8px">Charges as the bank shows them, handy next to a statement.</p>${Object.entries(accts).map(([k, v]) => `<div class="cat" style="grid-template-columns:1fr auto auto"><span>${esc(SOURCES[k] || k)}</span><span class="num">${money(v)}</span><button class="btn ghost sm" data-act="recon-open" data-src="${esc(k)}" data-m="${m}" style="min-height:30px;padding:3px 10px">Match</button></div>`).join("")}</div>` : ""}
+  <div class="panel"><h3 style="margin-bottom:8px">By category</h3>${cl.map(([k,v]) => `<div class="cat"><span>${esc(k)}</span><span class="b"><i style="width:${v/cmax*100}%"></i></span><span class="num">${money0(v)}</span></div>`).join("") || '<p class="muted">Nothing yet.</p>'}</div>
+  ${Object.keys(byDay).map(d => `<div class="day"><div class="dh"><span>${esc(longDay(d))}</span></div><div class="list">${byDay[d].map(txRow).join("")}</div></div>`).join("") || `<div class="list"><div class="empty">Nothing this month yet.</div></div>`}`;
+}
+
 /* ---------- savings goals ---------- */
 // Your savings fill your goals in order: the first goal fills up, then the next one starts.
 function goalsList(){ return (S.settings.goals || []).filter(g => g && g.name && +g.target > 0); }
@@ -1910,12 +2030,14 @@ function learn(it){
   if (sk && S.rules.save[sk]){ delete S.rules.save[sk]; S.rules._dirty = true; }
   const k = norm(it.orig || it.desc); if (!k || it.fund === "paycheck") return; if (S.rules.map[k] !== it.fund){ S.rules.map[k] = it.fund; S.rules._dirty = true; } }
 function saveRules(){ if (S.rules._dirty){ delete S.rules._dirty; store.save("rules", S.rules); } }
-function txFromItem(it){ const t = {id: uid(), date: it.date, desc: it.desc, fund: it.fund, amount: it.fund === "income" ? r2(it.flow) : r2(-it.flow), src: it.src}; if (it.details) t.details = it.details; if (it.amz) t.amz = it.amz; if (it.cat) t.cat = it.cat; if (it.bank !== undefined && Math.abs(Math.abs(it.bank) - Math.abs(it.flow)) > 0.004) t.bank = r2(Math.abs(it.bank)); return t; }
+function txFromItem(it){ const t = {id: uid(), date: it.date, desc: it.desc, fund: it.fund, amount: it.fund === "income" ? r2(it.flow) : r2(-it.flow), src: it.src}; if (it.details) t.details = it.details; if (it.amz) t.amz = it.amz; if (it.cat) t.cat = it.cat; if (it.tags && it.tags.length) t.tags = it.tags.slice(); if (it.bank !== undefined && Math.abs(Math.abs(it.bank) - Math.abs(it.flow)) > 0.004) t.bank = r2(Math.abs(it.bank)); return t; }
 
 const busyIds = new Set();
 async function confirmItems(ids){
   const items = S.inbox.items.filter(i => ids.includes(i.id) && i.status === "pending" && !busyIds.has(i.id));
   if (!items.length) return;
+  const closedTargets = [...new Set(items.filter(i => i.fund !== "skip" && i.fund !== "paycheck").map(i => periodFor(i.date)).filter(p => isClosed(p)))];
+  if (closedTargets.length && !S.closedOk){ closedGuard(closedTargets[0], {type: "confirm", ids: items.map(i => i.id)}); return; }
   items.forEach(i => busyIds.add(i.id));
   const snap = snapUndo();
   try{ await confirmItemsRun(items, snap); } finally { items.forEach(i => busyIds.delete(i.id)); }
@@ -2226,6 +2348,7 @@ function addImport(r){
   const items = r.items.map(i => ({...i, flow: r.flip ? -i.flow : i.flow}));
   const seen = new Set(S.inbox.seen), counts = {};
   let skipped = 0, dupCount = 0, added = 0, payCount = 0, outside = 0;
+  const impId = uid();
   // recent confirmed transactions to check against
   const confirmed = [];
   periodList().forEach(p => (S.periods[p].txns||[]).forEach(t => confirmed.push({...t, p})));
@@ -2240,7 +2363,7 @@ function addImport(r){
     const fp = hash(base + "#" + counts[base]);
     if (seen.has(fp)){ skipped++; L(raw, "seen", "Came in on an earlier import or pull. It was confirmed, denied, or is already waiting in Review."); continue; }
     seen.add(fp); S.inbox.seen.push(fp);
-    const it = {id: uid(), fp, src: r.src, date: raw.date, desc: raw.desc, orig: raw.desc, flow: r2(raw.flow), bank: r2(raw.flow), status:"pending"};
+    const it = {id: uid(), imp: impId, fp, src: r.src, date: raw.date, desc: raw.desc, orig: raw.desc, flow: r2(raw.flow), bank: r2(raw.flow), status:"pending"};
     fixDirection(it, raw.desc); applyShare(it, raw.desc);
     it.fund = suggest(it);
     const nm = (S.rules.names || {})[norm(raw.desc)]; if (nm) it.desc = nm;
@@ -2261,6 +2384,7 @@ function addImport(r){
     }
     S.inbox.items.push(it); added++; L(raw, "review", it.fund === "skip" ? "Pre-set to Skip, so check it in Review." : "");
   }
+  S.inbox.importLog = [{id: impId, at: Date.now(), name: r.name || "Import", src: r.src, added, dups: dupCount, skipped, paid: payCount, outside, total: items.length}, ...(S.inbox.importLog || [])].slice(0, 60);
   r.state = "added";
   r.msg = [`${added} sent to Review`, dupCount && `${dupCount} hidden as duplicates`, payCount && `${payCount} card payment${payCount>1?"s":""} left out`, skipped && `${skipped} already imported`, outside && `${outside} outside this paycheck left out`].filter(Boolean).join(", ") + ".";
   render(); saveInbox();
@@ -2712,7 +2836,7 @@ document.addEventListener("click", async e => {
     }
   }
   else if (a === "del-period"){ const p = periodList()[S.pIdx]; delete S.periods[p]; S.pIdx = null; closeSheet(); render(); store.remove("p-" + p); toast("Paycheck deleted."); }
-  else if (a === "edit-tx"){ const f = findTx(id); if (f) txSheet(f.t); }
+  else if (a === "edit-tx"){ const f = findTx(id); if (!f) return; if (isClosed(f.p)) closedGuard(f.p, {type: "edit", id}); else txSheet(f.t); }
   else if (a === "save-tx"){
     const amt = r2(parseAmt($("#t-amt").value)), desc = $("#t-desc").value.trim(), date = $("#t-date").value;
     const fund = ($("#fundPick [aria-pressed=true]") || {}).dataset?.pickf || "personal";
@@ -2726,13 +2850,14 @@ document.addEventListener("click", async e => {
     const details = $("#t-details").value.trim(), cat = $("#t-cat") ? $("#t-cat").value : "";
     Object.assign(t, {amount: amt, desc: desc || "Untitled", date, fund, details}); if (!details) delete t.details;
     if (cat) t.cat = cat; else delete t.cat;
+    { const tg = parseTags($("#t-tags") ? $("#t-tags").value : ""); if (tg.length) t.tags = tg; else delete t.tags; }
     if (before && before.t.date !== date) delete t.pinP;
     const p = t.pinP && S.periods[t.pinP] ? t.pinP : periodFor(date); (S.periods[p].txns = S.periods[p].txns || []).push(t); touched.add(p);
     if (before) logHist({kind: "edit", text: `Edited “${t.desc}” (${money(Math.abs(t.amount))})`, before, afterP: p});
     else logHist({kind: "add", text: `Added “${t.desc}” (${money(Math.abs(t.amount))})`, p, tid: t.id});
     closeSheet(); render(); for (const q of touched) await savePeriod(q); toast(id ? "Saved." : "Added.");
   }
-  else if (a === "tx-select"){ S.sel = new Set(); render(); }
+  else if (a === "tx-select"){ const p = periodList()[S.pIdx]; if (isClosed(p)) closedGuard(p, {type: "select"}); else { S.sel = new Set(); render(); } }
   else if (a === "tx-select-cancel"){ S.sel = null; render(); }
   else if (a === "tx-toggle"){ if (S.sel){ S.sel.has(id) ? S.sel.delete(id) : S.sel.add(id); render(); } }
   else if (a === "tx-select-all"){
@@ -2753,13 +2878,13 @@ document.addEventListener("click", async e => {
   else if (a === "del-tx"){ const f = findTx(id); if (!f) return; logHist({kind: "delete", text: `Deleted “${f.t.desc}” (${money(Math.abs(f.t.amount))})`, list: [{p: f.p, t: f.t}]}); S.periods[f.p].txns = S.periods[f.p].txns.filter(x => x.id !== id); closeSheet(); render(); savePeriod(f.p); toast("Deleted."); }
   else if (a === "pick"){ const it = S.inbox.items.find(i => i.id === id); if (it){ it.fund = el.dataset.fund; render(); saveInbox(); } }
   else if (a === "confirm") confirmItems([id]);
-  else if (a === "confirm-all") confirmItems(pending().map(i => i.id));
+  else if (a === "confirm-all") confirmItems(visibleReview().map(i => i.id));
   else if (a === "deny") denyItem(id);
   else if (a === "undo") doUndo();
   else if (a === "restore-denied") restoreDenied(id);
   else if (a === "rsel-start"){ S.rsel = new Set(); render(); }
   else if (a === "rsel-done"){ S.rsel = null; render(); }
-  else if (a === "rsel-all"){ const ids = pending().map(i => i.id); S.rsel = S.rsel && S.rsel.size === ids.length ? new Set() : new Set(ids); render(); }
+  else if (a === "rsel-all"){ const ids = visibleReview().map(i => i.id); S.rsel = S.rsel && S.rsel.size === ids.length ? new Set() : new Set(ids); render(); }
   else if (a === "rsel-period"){ const ids = pending().filter(i => periodFor(i.date) === el.dataset.p).map(i => i.id); const all = ids.every(x => S.rsel.has(x)); ids.forEach(x => all ? S.rsel.delete(x) : S.rsel.add(x)); render(); }
   else if (a === "rsel-confirm"){ const ids = [...(S.rsel || [])]; if (!ids.length) return; S.rsel = null; confirmItems(ids); }
   else if (a === "rsel-deny"){
@@ -2770,11 +2895,11 @@ document.addEventListener("click", async e => {
     const ids = [...(S.rsel || [])]; S.rsel = null; closeSheet(); denyIds(ids);
   }
   else if (a === "deny-all"){
-    const n = pending().length; if (!n) return;
+    const n = visibleReview().length; if (!n) return;
     openSheet(`<h2>Deny all ${n} charge${n===1?"":"s"}?</h2><p class="muted">None of them will be added, and they won’t come back if you import the same file again.</p><div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Cancel</button><button class="btn danger" data-act="deny-all-confirm">Deny all ${n}</button></div>`);
   }
   else if (a === "deny-all-confirm"){
-    closeSheet(); denyIds(pending().map(i => i.id));
+    closeSheet(); denyIds(visibleReview().map(i => i.id));
   }
   else if (a === "undup"){ const it = S.inbox.items.find(i => i.id === id); if (it){ it.status = "pending"; delete it.dupNote; render(); saveInbox(); } }
   else if (a === "dismiss-dup"){ S.inbox.items = S.inbox.items.filter(i => i.id !== id); render(); saveInbox(); }
@@ -2785,6 +2910,21 @@ document.addEventListener("click", async e => {
   else if (a === "range"){ S.range = el.dataset.r; render(); }
   else if (a === "save-moved") movedSheet();
   else if (a === "goals-edit") goalsSheet();
+  else if (a === "open-tags") go("tags");
+  else if (a === "tag-open"){ S.qMode = "all"; S.q = ""; S.qf = {tag: el.dataset.g}; S.qfOpen = true; go("search"); }
+  else if (a === "open-imports") go("imports");
+  else if (a === "imp-undo") undoImport(id);
+  else if (a === "open-compare") go("compare");
+  else if (a === "view-month"){ S.month = null; go("month"); }
+  else if (a === "view-paycheck") go("home");
+  else if (a === "month-prev" || a === "month-next"){ const months = [...new Set(periodList().flatMap(p => (S.periods[p].txns || []).map(t => t.date.slice(0, 7))).concat([todayIso().slice(0, 7)]))].sort(); const i = months.indexOf(S.month || todayIso().slice(0, 7)); S.month = months[Math.max(0, Math.min(months.length - 1, i + (a === "month-next" ? 1 : -1)))]; render(); }
+  else if (a === "tx-bulk-tag") openSheet(`<h2>Add a tag</h2><label class="field"><span>Tag</span>${tagInput("bt-tag", [])}</label><div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="tx-bulk-tag-ok">Add to ${S.sel ? S.sel.size : 0}</button></div>`);
+  else if (a === "tx-bulk-tag-ok"){ const tg = parseTags($("#bt-tag").value); if (!tg.length){ toast("Type a tag."); return; } closeSheet(); bulkEditTx(t => { t.tags = [...new Set([...(t.tags || []), ...tg])]; }, `Tagged #${tg.join(", #")}`); }
+  else if (a === "unlock-ok"){ S.unlocked = el.dataset.p; closeSheet(); const then = JSON.parse(el.dataset.then || "{}");
+    if (then.type === "edit"){ const f = findTx(then.id); if (f) txSheet(f.t); }
+    else if (then.type === "select"){ S.sel = new Set(); render(); }
+    else if (then.type === "health") healthFix(then.i);
+    else if (then.type === "confirm"){ S.closedOk = true; confirmItems(then.ids); S.closedOk = false; } }
   else if (a === "co-open") closeoutSheet(el.dataset.p);
   else if (a === "co-review"){ closeSheet(); go("review"); }
   else if (a === "co-amazon"){ closeSheet(); S.qMode = "amazon-unlabeled"; S.qf = {from: el.dataset.p, to: periodEnd(el.dataset.p)}; go("search"); }
@@ -2793,7 +2933,7 @@ document.addEventListener("click", async e => {
   else if (a === "recon-check") reconCheck();
   else if (a === "recon-snooze"){ S.settings.reconSnooze = el.dataset.m; store.save("settings", S.settings); render(); toast("Skipped for this month."); }
   else if (a === "open-health") go("health");
-  else if (a === "health-fix") healthFix(+el.dataset.i);
+  else if (a === "health-fix"){ const x = healthIssues()[+el.dataset.i]; if (x && x.kind !== "date" && x.kind !== "big" && (isClosed(x.p) || (x.kind === "wrongp" && isClosed(periodFor(x.t.date))))) closedGuard(isClosed(x.p) ? x.p : periodFor(x.t.date), {type: "health", i: +el.dataset.i}); else healthFix(+el.dataset.i); }
   else if (a === "health-ok"){ S.settings.healthIgnore = [...(S.settings.healthIgnore || []), el.dataset.k].slice(-500); store.save("settings", S.settings); render(); }
   else if (a === "ss-use"){ const x = (S.settings.savedSearches || [])[+el.dataset.i]; if (x){ S.q = x.q || ""; S.qMode = x.mode || "all"; S.qf = {...(x.qf || {})}; S.qfOpen = Object.values(S.qf).some(Boolean); render(); } }
   else if (a === "ss-del"){ S.settings.savedSearches.splice(+el.dataset.i, 1); store.save("settings", S.settings); render(); }
@@ -2866,6 +3006,7 @@ document.addEventListener("click", async e => {
     const it = S.inbox.items.find(i => i.id === id); if (!it) return;
     const desc = $("#i-desc").value.trim(), date = $("#i-date").value;
     { const c = $("#i-cat") ? $("#i-cat").value : ""; if (c) it.cat = c; else delete it.cat; }
+    { const tg = parseTags($("#i-tags") ? $("#i-tags").value : ""); if (tg.length) it.tags = tg; else delete it.tags; }
     let details = $("#i-details").value.trim();
     const dir = (($("#i-dir [aria-pressed=true]") || {}).dataset || {}).pickd || (it.flow < 0 ? "out" : "in");
     const amt = r2(Math.abs(parseAmt($("#i-amt").value)));
@@ -2940,6 +3081,10 @@ document.addEventListener("input", e => {
   if (e.target.id === "t-desc") fillFromMerchant();
   if (e.target.id === "rc-month" && e.target.value){ const m = e.target.value, d = toD(m + "-01"); d.setMonth(d.getMonth() + 1); d.setDate(0); $("#rc-from").value = m + "-01"; $("#rc-to").value = iso(d); } if (e.target.id === "gh-repo" || e.target.id === "gh-token") ghRead(); if (e.target.id === "q"){ S.q = e.target.value; $("#qres").innerHTML = searchResults(); } });
 document.addEventListener("change", e => {
+  if (e.target.dataset && e.target.dataset.act === "rsort"){ S.rsort = e.target.value; render(); return; }
+  if (e.target.dataset && e.target.dataset.act === "rsrc"){ S.rsrc = e.target.value; render(); return; }
+  if (e.target.dataset && e.target.dataset.act === "cmp-a"){ S.cmpA = e.target.value; render(); return; }
+  if (e.target.dataset && e.target.dataset.act === "cmp-b"){ S.cmpB = e.target.value; render(); return; }
   if (e.target.dataset && e.target.dataset.qf !== undefined){ S.qf = {...(S.qf || {}), [e.target.dataset.qf]: e.target.value.trim()}; S.qfOpen = true; render(); return; }
   if (e.target.dataset && e.target.dataset.act === "year-pick"){ S.year = e.target.value; render(); return; }
   if (e.target.dataset && e.target.dataset.catI !== undefined){
