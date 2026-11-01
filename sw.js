@@ -1,11 +1,25 @@
 // Payday offline support: keeps the app itself working with no connection.
 // Only the app's own files are cached. Sync and Google requests always go straight to the network.
-const CACHE = "payday-v31";
+const CACHE = "payday-v32";
 const SHELL = ["./", "index.html", "manifest.json", "pdf.min.js", "pdf.worker.min.js", "jszip.min.js", "icon-192.png", "icon-512.png",
   "firebase-app-compat.js", "firebase-auth-compat.js", "firebase-firestore-compat.js"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
-self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
+self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE && k !== "payday-share").map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener("fetch", e => {
+  // A zip shared to Payday from another app (Android share sheet): keep it, then open Payday to install it.
+  if (e.request.method === "POST" && new URL(e.request.url).pathname.endsWith("/share-target")){
+    e.respondWith((async () => {
+      try{
+        const form = await e.request.formData(), file = form.get("file");
+        if (file && file.size){
+          const cache = await caches.open("payday-share");
+          await cache.put(new URL("./__shared__", self.registration.scope).href, new Response(file, {headers: {"x-name": encodeURIComponent(file.name || "shared.zip"), "content-type": file.type || "application/zip"}}));
+        }
+      }catch(_){}
+      return Response.redirect(new URL("./?shared=1", self.registration.scope).href, 303);
+    })());
+    return;
+  }
   const url = new URL(e.request.url);
   const fonts = /^fonts\.(googleapis|gstatic)\.com$/.test(url.hostname);
   if (e.request.method !== "GET" || (url.origin !== self.location.origin && !fonts)) return;

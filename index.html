@@ -315,8 +315,9 @@ const SOURCES = {
 };
 /* ---------- version ---------- */
 // Bump APP_VERSION (and the cache name in sw.js to match) with every update, and add a line to CHANGES.
-const APP_VERSION = 31, APP_DATE = "2026-10-31";
+const APP_VERSION = 32, APP_DATE = "2026-11-01";
 const CHANGES = [
+  [32, "2026-11-01", "Bulk edit confirmed charges, your own categories, search filters, Year in review, share the update zip straight to Payday."],
   [31, "2026-10-31", "Repeats grouped in Review, merchant view, change history with undo, check merges, paycheck notes, compact Review on PC."],
   [30, "2026-10-31", "Version number shown at the bottom of every page. Tap it to see what changed."],
   [29, "2026-10-31", "Your rules page, Undo after confirm or deny, Denied this paycheck, keyboard shortcuts in Review, spreadsheet-style .xlsx export."],
@@ -345,12 +346,20 @@ const CATS = [
   ["Shopping", /amazon|amzn|temu|target|shein|ebay|best buy|etsy|aliexpress|tj ?maxx|marshalls|old navy|nike|home depot|lowe|socko/i],
   ["Vapes & smoke", /vape|smoke|dispo|tobacco/i]
 ];
-function category(t){
+function catName(k){ return (S.settings.catRename || {})[k] || k; }
+function allCategories(){
+  const custom = (S.settings.cats || []).map(c => c.name);
+  return [...custom, ...CATS.map(c => c[0]).filter(n => n !== "Gas"), "Other"].filter((v, i, a) => v && a.indexOf(v) === i);
+}
+function category(t){ return catName(rawCategory(t)); }
+function rawCategory(t){
   if (t.cat) return t.cat;
   if (t.fund === "gas") return "Gas";
   if (t.fund === "income") return "Extra income";
   if (t.fund === "savings") return "Moved to savings";
   if (t.fund === "debt") return "Debt";
+  const text = ((t.desc || "") + " " + (t.orig || "") + " " + (t.details || "")).toLowerCase();
+  for (const c of (S.settings.cats || [])) if ((c.words || []).some(w => w && text.includes(w))) return c.name;
   for (const [name, re] of CATS) if (re.test(t.desc)) return name;
   return "Other";
 }
@@ -529,6 +538,8 @@ function render(){
   else if (S.view === "search") m.innerHTML = viewSearch();
   else if (S.view === "rules") m.innerHTML = viewRules();
   else if (S.view === "history") m.innerHTML = viewHistory();
+  else if (S.view === "year") m.innerHTML = viewYear();
+  else if (S.view === "cats") m.innerHTML = viewCats();
   else if (S.view === "merges") m.innerHTML = viewMerges();
   else m.innerHTML = viewSettings();
   m.insertAdjacentHTML("beforeend", `<button class="ver" data-act="whatsnew" aria-label="${verLabel()}, see what’s new">${verLabel()} • ${short(APP_DATE)}</button>`);
@@ -722,14 +733,24 @@ const AMAZON_RE = /amazon|amzn|kindle|audible|prime video|amazon prime/i;
 function searchRows(){
   const q = (S.q || "").trim().toLowerCase(), mode = S.qMode || "amazon";
   const rows = [];
-  periodList().forEach(p => (S.periods[p].txns || []).forEach(t => rows.push({kind:"tx", p, id:t.id, date:t.date, desc:t.desc, orig:t.orig || "", details:t.details || "", amount: t.fund === "income" ? +t.amount : -(+t.amount), fund:t.fund, src:t.src, amz:t.amz})));
-  S.inbox.items.filter(i => i.status === "pending").forEach(i => rows.push({kind:"rv", p: periodFor(i.date), id:i.id, date:i.date, desc:i.desc, orig:i.orig || "", details:i.details || "", amount:i.flow, fund:i.fund, src:i.src, amz:i.amz}));
+  periodList().forEach(p => (S.periods[p].txns || []).forEach(t => rows.push({kind:"tx", p, id:t.id, date:t.date, desc:t.desc, orig:t.orig || "", details:t.details || "", amount: t.fund === "income" ? +t.amount : -(+t.amount), fund:t.fund, src:t.src, amz:t.amz, cat: category(t)})));
+  S.inbox.items.filter(i => i.status === "pending").forEach(i => rows.push({kind:"rv", p: periodFor(i.date), id:i.id, date:i.date, desc:i.desc, orig:i.orig || "", details:i.details || "", amount:i.flow, fund:i.fund, src:i.src, amz:i.amz, cat: category(i)}));
+  const F = S.qf || {};
   return rows.filter(r => {
     const text = (r.desc + " " + r.orig + " " + r.details).toLowerCase();
     if ((mode === "amazon" || mode === "amazon-unlabeled") && !AMAZON_RE.test(r.desc + " " + r.orig)) return false;
     // Spreadsheet entries like "amazon license plate bulbs" already say what the item was.
     if (mode === "amazon-unlabeled" && (r.details || (r.src === "sheet" && r.desc.replace(AMAZON_RE, "").replace(/[^a-z]/gi, "").length > 2))) return false;
     if (q && !text.includes(q) && !String(Math.abs(r.amount).toFixed(2)).includes(q)) return false;
+    if (F.from && r.date < F.from) return false;
+    if (F.to && r.date > F.to) return false;
+    if (F.fund && r.fund !== F.fund) return false;
+    if (F.src && r.src !== F.src) return false;
+    if (F.cat && r.cat !== catName(F.cat)) return false;
+    if (F.min && Math.abs(r.amount) < +F.min) return false;
+    if (F.max && Math.abs(r.amount) > +F.max) return false;
+    if (F.where === "review" && r.kind !== "rv") return false;
+    if (F.where === "confirmed" && r.kind !== "tx") return false;
     return true;
   }).sort((a,b) => b.date.localeCompare(a.date));
 }
@@ -753,12 +774,30 @@ function searchResults(){
     <input class="input" data-label="${r.kind}|${esc(r.p || "")}|${esc(r.id)}" value="${esc(r.details)}" placeholder="What was it? e.g. phone case, birthday gift" aria-label="What was ${esc(r.desc)} on ${esc(short(r.date))}?" enterkeyhint="done">
   </div>`).join("")}</div>`;
 }
+function filterPanel(){
+  const F = S.qf || {}, n = Object.values(F).filter(Boolean).length;
+  const opt = (list, val) => list.map(([v,l]) => `<option value="${esc(v)}" ${v===(val||"")?"selected":""}>${esc(l)}</option>`).join("");
+  return `<details class="panel" style="margin:0 0 10px;padding:10px 14px" ${S.qfOpen ? "open" : ""} data-act="qf-toggle"><summary style="cursor:pointer;font-weight:700">Filters${n ? ` (${n} on)` : ""}</summary>
+    <div class="grid2" style="margin-top:10px">
+      <label class="field"><span>From</span><input class="input" type="date" data-qf="from" value="${esc(F.from || "")}"></label>
+      <label class="field"><span>To</span><input class="input" type="date" data-qf="to" value="${esc(F.to || "")}"></label>
+      <label class="field"><span>Fund</span><select class="input" data-qf="fund">${opt([["","Any"],["personal","Personal"],["gas","Gas"],["debt","Debt"],["income","Extra income"],["savings","Moved to savings"],["skip","Skip"]], F.fund)}</select></label>
+      <label class="field"><span>Account</span><select class="input" data-qf="src">${opt([["","Any"], ...Object.entries(SOURCES)], F.src)}</select></label>
+      <label class="field"><span>Category</span><select class="input" data-qf="cat">${opt([["","Any"], ...allCategories().map(c => [c, catName(c)])], F.cat)}</select></label>
+      <label class="field"><span>Where</span><select class="input" data-qf="where">${opt([["","Anywhere"],["confirmed","Confirmed"],["review","In Review"]], F.where)}</select></label>
+      <label class="field"><span>Amount at least</span><input class="input num" inputmode="decimal" data-qf="min" value="${esc(F.min || "")}" placeholder="$"></label>
+      <label class="field"><span>Amount at most</span><input class="input num" inputmode="decimal" data-qf="max" value="${esc(F.max || "")}" placeholder="$"></label>
+    </div>
+    ${n ? `<button class="btn ghost sm" data-act="qf-clear">Clear filters</button>` : ""}
+  </details>`;
+}
 function viewSearch(){
   amzScrub();
   const mode = S.qMode || "amazon";
   const chip = (k, l) => `<button data-act="q-mode" data-m="${k}" aria-pressed="${mode===k}">${l}</button>`;
   return `<div class="topbar"><h1 style="display:flex;align-items:center;gap:12px"><button class="iconbtn" data-tab="home" aria-label="Back to Paycheck">${ICONS.left}</button>Search</h1></div>
   <input class="input" id="q" type="search" value="${esc(S.q || "")}" placeholder="Search names, labels or amounts" autocomplete="off" style="margin-bottom:10px">
+  ${filterPanel()}
   <div class="seg" style="margin-bottom:12px">${chip("amazon","Amazon")}${chip("amazon-unlabeled","Amazon without a label")}${chip("amazon-orders","Amazon orders")}${chip("all","Everything")}</div>
   ${mode !== "all" ? amzPanel() : ""}
   ${mode !== "all" && mode !== "amazon-orders" ? `<p class="small muted" style="margin:0 0 12px">Type what you bought in the box under each charge. It saves when you leave the box. To look items up, open <a href="https://www.amazon.com/gp/css/order-history" target="_blank" rel="noopener" style="color:var(--ink)">Your Orders on Amazon</a> and match the date and amount. Amazon charges your card when each package ships, so one order can show up as more than one charge.</p>` : ""}
@@ -770,7 +809,23 @@ function saveLabel(key, value){
   else { const it = S.inbox.items.find(i => i.id === id); if (!it) return; if ((it.details || "") === v) return; if (v) it.details = v; else delete it.details; saveInbox(); }
   toast(v ? "Label saved." : "Label removed.");
 }
+// One-time fix: old spreadsheet "over draft" lines are carry-overs, not purchases.
+// Moving them into the paycheck's carried-over amount keeps "Personal left" exactly the same.
+function fixOverdraftLines(){
+  if (!S.ready) return;
+  let n = 0;
+  for (const p of periodList()){
+    const per = S.periods[p], od = (per.txns || []).filter(t => t.fund === "personal" && /^\s*over\s*-?\s*draft/i.test(t.desc || "") && t.src === "sheet");
+    if (!od.length) continue;
+    const add = r2(od.reduce((a, t) => a + (+t.amount || 0), 0));
+    per.carryIn = r2((typeof per.carryIn === "number" ? per.carryIn : 0) + add);
+    per.txns = per.txns.filter(t => !od.includes(t)); n += od.length;
+    savePeriod(p);
+  }
+  if (n) setTimeout(() => toast(`Fixed ${n} old “over draft” line${n===1?"":"s"}: now counted as carried-over overspending, not a purchase.`), 400);
+}
 function viewHome(){
+  fixOverdraftLines();
   const list = periodList();
   if (!list.length) return `
     <h1>Payday</h1>
@@ -847,7 +902,12 @@ function viewHome(){
     </div>
     <div class="col-right">
       <div class="section-h"><h2>Transactions</h2>${S.sel?"":`<span class="small muted num">${txns.length} item${txns.length===1?"":"s"}${txns.length?` <button class="btn ghost sm" data-act="tx-select" style="margin-left:8px">Select</button>`:""}</span>`}</div>
-      ${S.sel ? `<div class="selbar"><span class="grow small muted num">${S.sel.size} selected</span><button class="btn ghost sm" data-act="tx-select-all">${S.sel.size===txns.length?"Clear":"Select all"}</button><button class="btn ghost sm" data-act="tx-select-cancel">Cancel</button><button class="btn danger sm" data-act="tx-bulk-delete" ${S.sel.size?"":"disabled"}>Delete${S.sel.size?" "+S.sel.size:""}</button></div>` : ""}
+      ${S.sel ? `<div class="selbar"><span class="grow small muted num">${S.sel.size} selected</span><button class="btn ghost sm" data-act="tx-select-all">${S.sel.size===txns.length?"Clear":"Select all"}</button><button class="btn ghost sm" data-act="tx-select-cancel">Cancel</button><button class="btn danger sm" data-act="tx-bulk-delete" ${S.sel.size?"":"disabled"}>Delete${S.sel.size?" "+S.sel.size:""}</button></div>
+      <div class="row" style="gap:8px;margin:-4px 0 12px">
+        <select class="input" data-act="tx-bulk-fund" style="width:auto;min-height:38px;padding:6px 10px" ${S.sel.size?"":"disabled"} aria-label="Change fund"><option value="">Change fund…</option>${[["personal","Personal"],["gas","Gas"],["debt","Debt"],["income","Extra income"],["savings","Moved to savings"]].map(([v,l]) => `<option value="${v}">${l}</option>`).join("")}</select>
+        <select class="input" data-act="tx-bulk-cat" style="width:auto;min-height:38px;padding:6px 10px" ${S.sel.size?"":"disabled"} aria-label="Change category"><option value="">Change category…</option><option value="__auto">Automatic</option>${allCategories().map(c => `<option value="${esc(c)}">${esc(catName(c))}</option>`).join("")}</select>
+        <select class="input" data-act="tx-bulk-move" style="width:auto;min-height:38px;padding:6px 10px" ${S.sel.size?"":"disabled"} aria-label="Move to paycheck"><option value="">Move to paycheck…</option>${periodList().slice().reverse().filter(q => q !== p).map(q => `<option value="${q}">${short(q)} to ${short(periodEnd(q))}</option>`).join("")}</select>
+      </div>` : ""}
       ${txHtml}
     </div>
   </div>${S.mode==="local"?localNotice():""}`;
@@ -1026,7 +1086,7 @@ function viewTrends(){
   const cmax = Math.max(1, ...cats.map(c=>c[1]));
   const tops = Object.entries(merch).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]).slice(0,8);
   const rng = [["3","3 paychecks"],["6","6"],["12","12"],["all","All"]].map(([k,l]) => `<button data-act="range" data-r="${k}" aria-pressed="${S.range===k}">${l}</button>`).join("");
-  return `<div class="topbar"><h1>Trends</h1></div>
+  return `<div class="topbar"><h1>Trends</h1><button class="btn ghost sm" data-act="open-year">Year in review</button></div>
   <div class="seg">${rng}</div>
   <div class="stats">
     <div class="stat"><div class="v num" style="color:var(--pos)">${money0(saved)}</div><div class="k">Saved</div></div>
@@ -1067,7 +1127,7 @@ function viewSettings(){
   const nRules = Object.keys(S.rules.map||{}).length;
   return `<div class="topbar"><h1>Settings</h1></div>
   <div class="panel"><h2 style="margin-bottom:6px">Update the app</h2>
-    <p class="muted" style="margin:0 0 12px">Choose the Payday-app.zip you were given and it’s published to your site for you. No manual uploading.</p>
+    <p class="muted" style="margin:0 0 12px">Choose the Payday-app.zip you were given and it’s published to your site for you. On your phone, it’s more reliable to share the zip to Payday: tap it in the Claude app or Files, tap <b style="color:var(--ink)">Share</b>, then pick <b style="color:var(--ink)">Payday</b>.</p>
     <label class="field"><span>GitHub repo</span><input class="input" id="gh-repo" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="yourname/payday" value="${esc(ghCfg().repo || ghGuessRepo())}"></label>
     <label class="field"><span>GitHub token</span><input class="input" id="gh-token" type="password" autocapitalize="off" autocomplete="off" placeholder="Paste once, saved on this device only" value="${esc(ghCfg().token || "")}"></label>
     <details style="margin:0 0 14px"><summary class="small muted">How to get a token (one time)</summary><ol class="small muted" style="margin:8px 0 0;padding-left:18px;line-height:1.6"><li>On GitHub: Settings > Developer settings > Personal access tokens > Fine-grained tokens > Generate new token.</li><li>Repository access: Only select repositories, then pick your Payday repo.</li><li>Permissions > Repository permissions > Contents: Read and write.</li><li>Generate, copy it, and paste it above. Anyone with this token can change that repo, so don’t share it.</li></ol></details>
@@ -1106,7 +1166,7 @@ function viewSettings(){
       <label class="btn ghost" style="display:inline-flex;align-items:center;cursor:pointer">Restore from backup<input type="file" id="restoreIn" accept="*/*" style="position:absolute;width:1px;height:1px;opacity:0"></label>
     </div>
     <p class="small muted" style="margin:12px 0 0">A backup is one file. Keep a copy in Google Drive or email it to yourself. To move your data to another phone or computer, back up here and restore it there.</p>
-    <div class="row" style="margin-top:12px"><button class="btn ghost" data-act="open-rules">Your rules (${ruleCount()})</button><button class="btn ghost" data-act="open-history">Change history</button><button class="btn ghost" data-act="open-merges">Check merges</button><button class="btn ghost" data-act="xlsx-open">Export like my spreadsheet (.xlsx)</button><button class="btn ghost" data-act="export">Export to spreadsheet (CSV)</button>${nRules?'<button class="btn ghost" data-act="clear-rules">Forget learned merchants</button>':""}</div>
+    <div class="row" style="margin-top:12px"><button class="btn ghost" data-act="open-rules">Your rules (${ruleCount()})</button><button class="btn ghost" data-act="open-cats">Your categories</button><button class="btn ghost" data-act="open-history">Change history</button><button class="btn ghost" data-act="open-merges">Check merges</button><button class="btn ghost" data-act="xlsx-open">Export like my spreadsheet (.xlsx)</button><button class="btn ghost" data-act="export">Export to spreadsheet (CSV)</button>${nRules?'<button class="btn ghost" data-act="clear-rules">Forget learned merchants</button>':""}</div>
   </div>
   <div class="panel"><h2 style="margin-bottom:6px">Appearance</h2>
     <div class="seg">${[["auto","Match phone"],["light","Light"],["dark","Dark"]].map(([k,l]) => `<button data-act="theme" data-t="${k}" aria-pressed="${(document.documentElement.dataset.theme||"auto")===k}">${l}</button>`).join("")}</div>
@@ -1166,6 +1226,7 @@ async function gitSha(data){
 }
 function b64(u8){ let s = ""; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); }
 async function prepareUpdate(file){
+  if (!file || !file.size){ toast("Your phone handed over an empty file (0 bytes). Share the zip to Payday instead: tap it in the Claude app or Files, tap Share, pick Payday. Or rename it in Files and choose it again."); return; }
   const c = ghRead(); if (c.repo) ghSet({repo: c.repo});
   if (!c.repo || !c.token){ toast("Save your GitHub repo and token first."); return; }
   toast("Reading the update…");
@@ -1413,6 +1474,7 @@ function txSheet(t){
     ${isNew ? "" : `<p style="margin:-6px 0 12px"><button class="btn ghost sm" data-act="merchant" data-q="${esc(t.desc)}" data-o="${esc(t.orig || "")}">See every charge from “${esc(t.desc)}”</button></p>`}
     <label class="field"><span>What was it?</span><input class="input" id="t-desc" value="${esc(t.desc)}" placeholder="Where it was charged"></label>
     <label class="field"><span>Details</span><input class="input" id="t-details" value="${esc(t.details||"")}" placeholder="What it was for, who it was with…"></label>
+    <label class="field"><span>Category</span>${catSelect("t-cat", t.cat || "")}</label>
     <label class="field"><span>Date</span><input class="input" type="date" id="t-date" value="${t.date}"></label>
     <div class="field"><span>Which fund</span>${fundPicker(t.fund, ["personal","gas","debt","income","savings"])}</div>
     <div class="row" style="justify-content:space-between;margin-top:6px">
@@ -1443,6 +1505,7 @@ function itemSheet(it){
     <label class="field"><span>Name</span><input class="input" id="i-desc" value="${esc(it.desc)}"></label>
     <label class="field"><span>Details</span><input class="input" id="i-details" value="${esc(it.details||"")}" placeholder="What it was for, who it was with…"></label>
     <label class="field"><span>Date</span><input class="input" type="date" id="i-date" value="${it.date}"></label>
+    <label class="field"><span>Category</span>${catSelect("i-cat", it.cat || "")}</label>
     <div class="field"><span>Money</span><div class="seg" id="i-dir"><button type="button" data-pickd="out" aria-pressed="${it.flow < 0}">Charge (money out)</button><button type="button" data-pickd="in" aria-pressed="${it.flow > 0}">Money in</button></div></div>
     <label class="field"><span>Amount that counts for you</span><input class="input num" id="i-amt" inputmode="decimal" value="${Math.abs(it.flow).toFixed(2)}"><small>The bank charged ${money(Math.abs(bank))}. Split a bill? Enter just your part.</small></label>
     <div class="row" style="margin:-6px 0 14px"><button type="button" class="btn ghost sm" data-share="0.5">Half: ${money(Math.abs(bank)/2)}</button><button type="button" class="btn ghost sm" data-share="1">All: ${money(Math.abs(bank))}</button></div>
@@ -1482,6 +1545,33 @@ function fundSheet(f){
       : `<div class="list" style="margin-top:8px"><div class="empty">Nothing in ${esc(names[f])} for this paycheck yet.</div></div>`}
     <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn ghost" data-act="close">Close</button></div>`);
 }
+/* ---------- your categories ---------- */
+function catSelect(id, val){
+  return `<select class="input" id="${id}"><option value="">Automatic${val ? "" : " (Payday picks)"}</option>${allCategories().map(c => `<option value="${esc(c)}" ${c === val ? "selected" : ""}>${esc(catName(c))}</option>`).join("")}</select>`;
+}
+function viewCats(){
+  const custom = S.settings.cats || [];
+  const used = {}; periodList().forEach(p => (S.periods[p].txns || []).forEach(t => { const c = rawCategory(t); used[c] = (used[c] || 0) + 1; }));
+  return `<div class="topbar"><h1 style="display:flex;align-items:center;gap:12px"><button class="iconbtn" data-tab="settings" aria-label="Back to Settings">${ICONS.left}</button>Your categories</h1></div>
+  <p class="muted" style="margin:0 0 12px">Categories group your spending in Trends, search and Year in review. Payday guesses them from the charge’s name. You can also set one on any charge when you edit it.</p>
+  <h3 style="margin:16px 0 4px">Your own</h3>
+  <p class="small muted" style="margin:0 0 8px">Charges whose name, bank name or details contain one of the words go in that category. Your own categories win over the built-in ones.</p>
+  ${custom.length ? `<div class="list" style="padding:0">${custom.map((c, i) => `<div style="padding:12px 14px;border-top:1px solid var(--line)">
+      <div class="row" style="flex-wrap:nowrap"><input class="input" data-cat-i="${i}" data-cat-f="name" value="${esc(c.name)}" aria-label="Category name" style="min-height:40px"><button class="iconbtn" data-act="cat-del" data-i="${i}" aria-label="Delete category" style="width:36px;height:36px;flex:none">✕</button></div>
+      <input class="input" data-cat-i="${i}" data-cat-f="words" value="${esc((c.words || []).join(", "))}" placeholder="Words, separated by commas, like: autozone, advance auto" style="margin-top:8px;min-height:40px" aria-label="Matching words">
+      <div class="small muted" style="margin-top:4px">${used[c.name] || 0} charge${used[c.name] === 1 ? "" : "s"}</div></div>`).join("")}</div>` : `<p class="small muted">None yet.</p>`}
+  <div class="row" style="margin-top:8px"><button class="btn sm" data-act="cat-add">Add a category</button></div>
+  <h3 style="margin:22px 0 4px">Built in</h3>
+  <p class="small muted" style="margin:0 0 8px">Rename any of these. Charges keep their category, it just shows your name.</p>
+  <div class="list" style="padding:0">${CATS.map(c => c[0]).filter(n => n !== "Gas").concat(["Other"]).map(k => `<div class="row" style="justify-content:space-between;flex-wrap:nowrap;padding:8px 14px;border-top:1px solid var(--line)"><span class="small muted" style="min-width:90px">${esc(k)}</span><input class="input" data-catren="${esc(k)}" value="${esc(catName(k))}" style="max-width:220px;min-height:38px" aria-label="Name for ${esc(k)}"><span class="small muted" style="width:70px;text-align:right">${used[k] || 0}</span></div>`).join("")}</div>`;
+}
+function saveCats(){ store.save("settings", S.settings); }
+function renameCategoryEverywhere(oldName, newName){
+  const touched = new Set();
+  periodList().forEach(p => (S.periods[p].txns || []).forEach(t => { if (t.cat === oldName){ t.cat = newName; touched.add(p); } }));
+  S.inbox.items.forEach(i => { if (i.cat === oldName) i.cat = newName; });
+  touched.forEach(p => savePeriod(p)); saveInbox();
+}
 /* ---------- rules: everything Payday was told to "always" do ---------- */
 function ruleCount(){ const r = S.rules; return Object.keys(r.map || {}).length + Object.keys(r.names || {}).length + Object.keys(r.split || {}).length + Object.keys(r.dir || {}).length + Object.keys(r.save || {}).length + Object.keys(S.settings.formats || {}).length; }
 function viewRules(){
@@ -1504,6 +1594,56 @@ function ruleSet(t, k, v){
   S.rules[t] = S.rules[t] || {};
   if (v === null) delete S.rules[t][k]; else S.rules[t][k] = v;
   store.save("rules", S.rules);
+}
+/* ---------- year in review ---------- */
+function yearStats(y){
+  const ps = periodList().filter(p => p.startsWith(y));
+  let earned = 0, extra = 0, spent = 0, saved = 0, owed = 0, over = 0, biggest = null;
+  const cats = {}, places = {}, months = {};
+  for (const p of ps){
+    const c = calc(p); earned += c.pay; extra += c.extra; owed += c.savings; if (c.personalLeft < 0) over++;
+    for (const t of (S.periods[p].txns || [])){
+      const a = +t.amount || 0;
+      if (t.fund === "savings"){ saved += a; continue; }
+      if (t.fund === "income") continue;
+      spent += a;
+      const k = category(t); cats[k] = (cats[k] || 0) + a;
+      const m = norm(t.orig || t.desc) || "other"; places[m] = places[m] || {name: t.desc, amt: 0, n: 0}; places[m].amt += a; places[m].n++;
+      const mo = t.date.slice(0, 7); months[mo] = (months[mo] || 0) + a;
+      if (!biggest || a > biggest.amount) biggest = t;
+    }
+  }
+  return {ps, earned: r2(earned), extra: r2(extra), spent: r2(spent), saved: r2(saved), owed: r2(owed), over, biggest,
+    cats: Object.entries(cats).filter(([,v]) => v > 0).sort((a,b) => b[1]-a[1]), places: Object.values(places).sort((a,b) => b.amt - a.amt).slice(0, 10), months};
+}
+function viewYear(){
+  const years = [...new Set(periodList().map(p => p.slice(0, 4)))].sort().reverse();
+  const y = S.year && years.includes(S.year) ? S.year : years[0];
+  if (!y) return `<div class="topbar"><h1>Year in review</h1></div><p class="muted">No paychecks yet.</p>`;
+  const Y = yearStats(y), cmax = Math.max(1, ...Y.cats.map(c => c[1]));
+  const mos = Object.keys(Y.months).sort(), mmax = Math.max(1, ...Object.values(Y.months));
+  const W = 640, H = 180, bw = (W - 20) / Math.max(1, mos.length);
+  const gs = goalProgress();
+  return `<div class="topbar"><h1 style="display:flex;align-items:center;gap:12px"><button class="iconbtn" data-tab="trends" aria-label="Back to Trends">${ICONS.left}</button>Year in review</h1>
+    <span class="row">${years.length > 1 ? `<select class="input" data-act="year-pick" style="width:auto;min-height:38px">${years.map(v => `<option ${v===y?"selected":""}>${v}</option>`).join("")}</select>` : ""}<button class="btn ghost sm" data-act="year-export" data-y="${y}">Export .xlsx</button></span></div>
+  <p class="muted" style="margin:0">${Y.ps.length} paycheck${Y.ps.length===1?"":"s"} in ${y}.</p>
+  <div class="stats"><div class="stat"><div class="v num">${money0(Y.earned + Y.extra)}</div><div class="k">Earned</div></div><div class="stat"><div class="v num" style="color:var(--pos)">${money0(Y.saved)}</div><div class="k">Moved to savings</div></div><div class="stat"><div class="v num">${money0(Y.spent)}</div><div class="k">Spent</div></div></div>
+  <div class="panel"><div class="small muted">Paychecks ${money0(Y.earned)} + extra income ${money0(Y.extra)}. Savings owed for the year: ${money0(Y.owed)}${Y.saved ? `, moved ${money0(Y.saved)}` : ""}. Went over on Personal in ${Y.over} of ${Y.ps.length} paychecks.${Y.biggest ? ` Biggest single charge: ${esc(Y.biggest.desc)}, ${money(+Y.biggest.amount)} on ${esc(short(Y.biggest.date))}.` : ""}</div></div>
+  <div class="panel"><h3 style="margin-bottom:8px">Spending by month</h3><div class="tablewrap"><svg class="chart" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Spending by month">${mos.map((m, i) => { const v = Y.months[m], h = (v / mmax) * (H - 40), x = 10 + i * bw + bw * .15; return `<rect x="${x}" y="${H - 22 - h}" width="${bw * .7}" height="${h}" rx="3" fill="var(--personal)"><title>${MON[+m.slice(5)-1]}: ${money(v)}</title></rect><text x="${x + bw*.35}" y="${H-6}" text-anchor="middle">${MON[+m.slice(5)-1]}</text><text x="${x + bw*.35}" y="${H - 26 - h}" text-anchor="middle">${money0(v)}</text>`; }).join("")}</svg></div></div>
+  <div class="panel"><h3 style="margin-bottom:8px">By category</h3>${Y.cats.map(([k,v]) => `<div class="cat"><span>${esc(k)}</span><span class="b"><i style="width:${v/cmax*100}%"></i></span><span class="num">${money0(v)}</span></div>`).join("") || '<p class="muted">Nothing yet.</p>'}</div>
+  <div class="panel"><h3 style="margin-bottom:8px">Top places</h3>${Y.places.map(pl => `<div class="cat" style="grid-template-columns:1fr auto auto"><button class="linkish" data-act="merchant" data-q="${esc(pl.name)}" data-o="">${esc(pl.name)}</button><span class="small muted">${pl.n}×</span><span class="num">${money(pl.amt)}</span></div>`).join("") || '<p class="muted">Nothing yet.</p>'}</div>
+  ${gs.length ? `<div class="panel"><h3 style="margin-bottom:8px">Goals</h3>${gs.map(g => `<div class="cat" style="grid-template-columns:1fr auto"><span>${esc(g.name)}</span><span class="num">${money0(g.saved)} of ${money0(g.target)}</span></div>`).join("")}</div>` : ""}`;
+}
+async function exportYear(y){
+  const Y = yearStats(y);
+  const rows = [[{v: `PAYDAY ${y}`, bold: true, fill: "black"}], [],
+    [{v: "Earned from paychecks", bold: true}, {v: Y.earned}], [{v: "Extra income", bold: true}, {v: Y.extra}], [{v: "Spent", bold: true}, {v: Y.spent}],
+    [{v: "Moved to savings", bold: true, fill: "green"}, {v: Y.saved, fill: "green"}], [{v: "Savings owed", bold: true}, {v: Y.owed}], [{v: "Paychecks over on Personal", bold: true}, `${Y.over} of ${Y.ps.length}`], [],
+    [{v: "BY CATEGORY", bold: true, fill: "yellow"}, {v: "Amount", bold: true, fill: "yellow"}], ...Y.cats.map(([k,v]) => [k, {v: r2(v)}]), [],
+    [{v: "BY MONTH", bold: true, fill: "orange"}, {v: "Amount", bold: true, fill: "orange"}], ...Object.keys(Y.months).sort().map(m => [`${MON[+m.slice(5)-1]} ${y}`, {v: r2(Y.months[m])}]), [],
+    [{v: "TOP PLACES", bold: true, fill: "blue"}, {v: "Amount", bold: true, fill: "blue"}, {v: "Charges", bold: true, fill: "blue"}], ...Y.places.map(pl => [pl.name, {v: r2(pl.amt)}, String(pl.n)])];
+  try{ saveBlob(`Payday ${y} in review.xlsx`, await buildXlsx([{name: `Year ${y}`, rows, cols: [34, 16, 12]}])); toast("Saved to your Downloads."); }
+  catch(e){ toast("Couldn’t build the file. Try again."); }
 }
 /* ---------- savings goals ---------- */
 // Your savings fill your goals in order: the first goal fills up, then the next one starts.
@@ -1588,7 +1728,7 @@ function learn(it){
   if (sk && S.rules.save[sk]){ delete S.rules.save[sk]; S.rules._dirty = true; }
   const k = norm(it.orig || it.desc); if (!k || it.fund === "paycheck") return; if (S.rules.map[k] !== it.fund){ S.rules.map[k] = it.fund; S.rules._dirty = true; } }
 function saveRules(){ if (S.rules._dirty){ delete S.rules._dirty; store.save("rules", S.rules); } }
-function txFromItem(it){ const t = {id: uid(), date: it.date, desc: it.desc, fund: it.fund, amount: it.fund === "income" ? r2(it.flow) : r2(-it.flow), src: it.src}; if (it.details) t.details = it.details; if (it.amz) t.amz = it.amz; return t; }
+function txFromItem(it){ const t = {id: uid(), date: it.date, desc: it.desc, fund: it.fund, amount: it.fund === "income" ? r2(it.flow) : r2(-it.flow), src: it.src}; if (it.details) t.details = it.details; if (it.amz) t.amz = it.amz; if (it.cat) t.cat = it.cat; return t; }
 
 const busyIds = new Set();
 async function confirmItems(ids){
@@ -1635,10 +1775,20 @@ function logHist(e){
   S.hist.kind = "history"; store.save("history", S.hist);
   return entry.id;
 }
+function bulkEditTx(apply, label){
+  const p = periodList()[S.pIdx], per = S.periods[p]; if (!per || !S.sel || !S.sel.size) return;
+  const list = (per.txns || []).filter(t => S.sel.has(t.id)); if (!list.length) return;
+  const edits = list.map(t => ({before: {p, t: clone(t), id: t.id}}));
+  const touched = new Set([p]);
+  list.forEach(t => { const dest = apply(t); if (dest && dest !== p){ per.txns = per.txns.filter(x => x.id !== t.id); (S.periods[dest].txns = S.periods[dest].txns || []).push(t); touched.add(dest); } });
+  edits.forEach((e, i) => { e.afterP = list[i].pinP || p; });
+  logHist({kind: "edits", text: `${label} for ${list.length} charge${list.length===1?"":"s"}`, edits});
+  S.sel = null; render(); touched.forEach(q => savePeriod(q)); toast(`${label} for ${list.length}.`);
+}
 async function undoHist(hid){
   const e = (S.hist.entries || []).find(x => x.id === hid); if (!e || e.undone) return;
   const touched = new Set(); let inbox = false, n = 0;
-  const removeTx = (p, id) => { for (const q of (S.periods[p] ? [p] : periodList())){ const per = S.periods[q]; const before = (per.txns || []).length; per.txns = (per.txns || []).filter(t => t.id !== id); if (per.txns.length !== before){ touched.add(q); n++; return true; } } return false; };
+  const removeTx = (p, id) => { for (const q of [...new Set([p, ...periodList()])].filter(q => S.periods[q])){ const per = S.periods[q]; const before = (per.txns || []).length; per.txns = (per.txns || []).filter(t => t.id !== id); if (per.txns.length !== before){ touched.add(q); n++; return true; } } return false; };
   const addTx = (p, t) => { const q = S.periods[p] ? p : periodFor(t.date); if (!q) return; if ((S.periods[q].txns || []).some(x => x.id === t.id)) return; (S.periods[q].txns = S.periods[q].txns || []).push(clone(t)); touched.add(q); n++; };
   const backToReview = items => items.forEach(it => { if (!S.inbox.items.some(x => x.id === it.id)){ const c = {...clone(it), status: "pending"}; delete c.deniedAt; S.inbox.items.push(c); inbox = true; n++; } S.inbox.denied = (S.inbox.denied || []).filter(d => d.id !== it.id); });
   if (e.kind === "confirm"){ (e.added || []).forEach(a => removeTx(a.p, a.id)); backToReview(e.items || []); }
@@ -1646,6 +1796,7 @@ async function undoHist(hid){
   else if (e.kind === "add") removeTx(e.p, e.tid);
   else if (e.kind === "edit"){ removeTx(e.afterP, e.before.id); addTx(e.before.p, e.before.t); }
   else if (e.kind === "delete") (e.list || []).forEach(x => addTx(x.p, x.t));
+  else if (e.kind === "edits") (e.edits || []).forEach(x => { removeTx(x.afterP, x.before.id); addTx(x.before.p, x.before.t); });
   for (const d of (e.createdPays || [])) if (S.periods[d] && !(S.periods[d].txns || []).length){ delete S.periods[d]; touched.delete(d); store.remove("p-" + d); }
   e.undone = true; store.save("history", S.hist);
   S.pIdx = null; render(); await Promise.all([...[...touched].map(savePeriod), inbox ? saveInbox() : null]);
@@ -2117,6 +2268,21 @@ function doRestore(){
   applyDocs(docs); pendingRestore = null; S.pIdx = null; closeSheet(); S.view = "home"; render(); toast("Backup restored.");
 }
 let installEvt = null;
+// A zip shared to Payday from another app arrives through the service worker and waits here.
+async function takeSharedFile(){
+  if (!/[?&]shared=1/.test(location.search)) return;
+  history.replaceState(null, "", location.pathname + location.hash);
+  try{
+    const cache = await caches.open("payday-share");
+    const key = new URL("./__shared__", location.href).href, res = await cache.match(key);
+    if (!res){ toast("The shared file didn’t come through. Try sharing it again."); return; }
+    const blob = await res.blob(), name = decodeURIComponent(res.headers.get("x-name") || "shared.zip");
+    await cache.delete(key);
+    const file = new File([blob], name, {type: blob.type || "application/zip"});
+    S.view = "settings"; render();
+    setTimeout(() => prepareUpdate(file), 300);
+  }catch(e){ toast("Couldn’t read the shared file."); }
+}
 function setupPWA(){
   if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
@@ -2374,9 +2540,11 @@ document.addEventListener("click", async e => {
     let before = null;
     if (id){ const f = findTx(id); if (!f) return; t = f.t; before = {p: f.p, t: clone(f.t), id}; S.periods[f.p].txns = S.periods[f.p].txns.filter(x => x.id !== id); touched.add(f.p); }
     else t = {id: uid(), src:"manual"};
-    const details = $("#t-details").value.trim();
+    const details = $("#t-details").value.trim(), cat = $("#t-cat") ? $("#t-cat").value : "";
     Object.assign(t, {amount: amt, desc: desc || "Untitled", date, fund, details}); if (!details) delete t.details;
-    const p = periodFor(date); (S.periods[p].txns = S.periods[p].txns || []).push(t); touched.add(p);
+    if (cat) t.cat = cat; else delete t.cat;
+    if (before && before.t.date !== date) delete t.pinP;
+    const p = t.pinP && S.periods[t.pinP] ? t.pinP : periodFor(date); (S.periods[p].txns = S.periods[p].txns || []).push(t); touched.add(p);
     if (before) logHist({kind: "edit", text: `Edited “${t.desc}” (${money(Math.abs(t.amount))})`, before, afterP: p});
     else logHist({kind: "add", text: `Added “${t.desc}” (${money(Math.abs(t.amount))})`, p, tid: t.id});
     closeSheet(); render(); for (const q of touched) await savePeriod(q); toast(id ? "Saved." : "Added.");
@@ -2434,6 +2602,12 @@ document.addEventListener("click", async e => {
   else if (a === "range"){ S.range = el.dataset.r; render(); }
   else if (a === "save-moved") movedSheet();
   else if (a === "goals-edit") goalsSheet();
+  else if (a === "open-year") go("year");
+  else if (a === "open-cats") go("cats");
+  else if (a === "year-export") exportYear(el.dataset.y);
+  else if (a === "cat-add"){ S.settings.cats = [...(S.settings.cats || []), {name: "New category " + ((S.settings.cats || []).length + 1), words: []}]; saveCats(); render(); }
+  else if (a === "cat-del"){ const c = (S.settings.cats || [])[+el.dataset.i]; if (c){ S.settings.cats.splice(+el.dataset.i, 1); renameCategoryEverywhere(c.name, undefined); saveCats(); render(); toast("Category deleted. Its charges go back to Payday’s guess."); } }
+  else if (a === "qf-clear"){ S.qf = {}; render(); }
   else if (a === "open-history") go("history");
   else if (a === "open-merges") go("merges");
   else if (a === "hist-undo") undoHist(id);
@@ -2494,6 +2668,7 @@ document.addEventListener("click", async e => {
   else if (a === "save-item"){
     const it = S.inbox.items.find(i => i.id === id); if (!it) return;
     const desc = $("#i-desc").value.trim(), date = $("#i-date").value;
+    { const c = $("#i-cat") ? $("#i-cat").value : ""; if (c) it.cat = c; else delete it.cat; }
     let details = $("#i-details").value.trim();
     const dir = (($("#i-dir [aria-pressed=true]") || {}).dataset || {}).pickd || (it.flow < 0 ? "out" : "in");
     const amt = r2(Math.abs(parseAmt($("#i-amt").value)));
@@ -2566,6 +2741,22 @@ document.addEventListener("click", async e => {
 });
 document.addEventListener("input", e => { if (e.target.id === "gh-repo" || e.target.id === "gh-token") ghRead(); if (e.target.id === "q"){ S.q = e.target.value; $("#qres").innerHTML = searchResults(); } });
 document.addEventListener("change", e => {
+  if (e.target.dataset && e.target.dataset.qf !== undefined){ S.qf = {...(S.qf || {}), [e.target.dataset.qf]: e.target.value.trim()}; S.qfOpen = true; render(); return; }
+  if (e.target.dataset && e.target.dataset.act === "year-pick"){ S.year = e.target.value; render(); return; }
+  if (e.target.dataset && e.target.dataset.catI !== undefined){
+    const i = +e.target.dataset.catI, c = (S.settings.cats || [])[i]; if (!c) return;
+    if (e.target.dataset.catF === "name"){ const nn = e.target.value.trim(); if (!nn){ toast("A category needs a name."); return; } if (allCategories().includes(nn) && nn !== c.name){ toast("There’s already a category with that name."); return; } renameCategoryEverywhere(c.name, nn); c.name = nn; }
+    else c.words = e.target.value.split(",").map(w => w.trim().toLowerCase()).filter(Boolean);
+    saveCats(); toast("Saved."); return;
+  }
+  if (e.target.dataset && e.target.dataset.catren !== undefined){ S.settings.catRename = {...(S.settings.catRename || {}), [e.target.dataset.catren]: e.target.value.trim() || e.target.dataset.catren}; if (S.settings.catRename[e.target.dataset.catren] === e.target.dataset.catren) delete S.settings.catRename[e.target.dataset.catren]; saveCats(); toast("Saved."); return; }
+  if (e.target.dataset && ["tx-bulk-fund","tx-bulk-cat","tx-bulk-move"].includes(e.target.dataset.act)){
+    const v = e.target.value; if (!v) return;
+    if (e.target.dataset.act === "tx-bulk-fund") bulkEditTx(t => { t.fund = v; }, `Fund set to ${FUNDS[v].label}`);
+    else if (e.target.dataset.act === "tx-bulk-cat") bulkEditTx(t => { if (v === "__auto") delete t.cat; else t.cat = v; }, v === "__auto" ? "Category set to automatic" : `Category set to ${catName(v)}`);
+    else bulkEditTx(t => { t.pinP = v; return v; }, `Moved to the ${short(v)} paycheck`);
+    return;
+  }
   if (e.target.dataset && e.target.dataset.act === "cpick"){ const it = S.inbox.items.find(i => i.id === e.target.dataset.id); if (it){ it.fund = e.target.value; render(); saveInbox(); } return; }
   if (e.target.dataset && e.target.dataset.act === "gcpick"){ if (!e.target.value) return; const ids = e.target.dataset.ids.split(","); S.inbox.items.forEach(i => { if (ids.includes(i.id)) i.fund = e.target.value; }); render(); saveInbox(); return; }
   if (e.target.dataset && e.target.dataset.rselg !== undefined && S.rsel){ e.target.dataset.rselg.split(",").forEach(id => e.target.checked ? S.rsel.add(id) : S.rsel.delete(id)); render(); return; }
@@ -2643,7 +2834,7 @@ document.addEventListener("keydown", e => {
 $("#fab").addEventListener("click", () => txSheet(null));
 
 try{ const t = localStorage.getItem("payday-theme"); if (t && t !== "auto") document.documentElement.dataset.theme = t; }catch(_){}
-takeLinkFromUrl(); localBoot(); setupPWA(); initFirebase();
+takeLinkFromUrl(); localBoot(); setupPWA(); initFirebase(); takeSharedFile();
 </script>
 </body>
 </html>
