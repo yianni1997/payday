@@ -137,6 +137,11 @@ nav.tabs .navver{display:none}
   .rep .foot{margin-top:16px;font-size:10px;color:#777}
   body.printing::before{display:none}
 }
+.panel.fold > :not(h2){display:none}
+.panel > h2.foldable{cursor:pointer;display:flex;justify-content:space-between;align-items:center}
+.panel > h2.foldable::after{content:"▾";font-size:16px;color:var(--muted);transition:transform .15s}
+.panel.fold > h2.foldable::after{transform:rotate(-90deg)}
+.hit{outline:3px solid var(--focus);outline-offset:2px}
 .fund .mini{grid-column:2/4;height:4px;border-radius:2px;background:var(--sunk);margin-top:8px;overflow:hidden}
 .fund .mini i{display:block;height:100%}
 .fund.clickable{cursor:pointer}
@@ -335,8 +340,9 @@ const SOURCES = {
 };
 /* ---------- version ---------- */
 // Bump APP_VERSION (and the cache name in sw.js to match) with every update, and add a line to CHANGES.
-const APP_VERSION = 36, APP_DATE = "2026-11-01";
+const APP_VERSION = 37, APP_DATE = "2026-11-01";
 const CHANGES = [
+  [37, "2026-11-01", "Tidier Settings with search, Jump anywhere (Ctrl+K), canceled subscription watch, price change flags, receipt photos, paycheck insights, text size."],
   [36, "2026-11-01", "Merge merchant names, category over time, subscription list, starred charges, one-page paycheck report, sync status, what changed on your other device."],
   [35, "2026-11-01", "Tags, compare two paychecks, closed paychecks protected, sort and filter Review, import history with undo, month view."],
   [34, "2026-11-01", "Close out a paycheck, match a statement (with monthly reminders), health check, faster manual adds, saved searches."],
@@ -575,7 +581,7 @@ function render(){
   else if (S.view === "starred") m.innerHTML = viewStarred();
   else if (S.view === "cats") m.innerHTML = viewCats();
   else if (S.view === "merges") m.innerHTML = viewMerges();
-  else m.innerHTML = viewSettings();
+  else { m.innerHTML = viewSettings(); enhanceSettings(); }
   m.insertAdjacentHTML("beforeend", `<button class="ver" data-act="whatsnew" aria-label="${verLabel()}, see what’s new">${verLabel()} • ${short(APP_DATE)}</button><div class="ver" style="margin-top:0;cursor:default" data-sync>${syncDot()} ${syncLabel()}</div>`);
 }
 function go(view){ S.sel = null; S.rsel = null; S.view = view; render(); window.scrollTo(0,0); if (view === "accounts") plaidAutoLoad(); }
@@ -904,7 +910,7 @@ function viewHome(){
 
   return `
   <div class="topbar home">
-    <h1 style="display:flex;align-items:center;gap:12px">Paycheck <button class="iconbtn" data-act="open-search" aria-label="Search charges" title="Search charges"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></button></h1>
+    <h1 style="display:flex;align-items:center;gap:12px">Paycheck <button class="iconbtn" data-act="jump" aria-label="Jump anywhere" title="Jump anywhere (Ctrl+K)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h12M13 6l6 6-6 6"/></svg></button><button class="iconbtn" data-act="open-search" aria-label="Search charges" title="Search charges"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></button></h1>
     <div class="period-nav">
       <button class="iconbtn" data-act="prev" ${S.pIdx===0?"disabled":""} aria-label="Previous paycheck">${ICONS.left}</button>
       <div class="period-label">${short(p)} – ${short(end)}<small>${per.closed ? `✅ Closed <button class="linkish small" data-act="co-open" data-p="${p}" style="font-weight:400;text-decoration:underline">view</button>` : latest ? (daysLeft ? daysLeft + " day" + (daysLeft>1?"s":"") + " left" : "Ended") : "Past paycheck"}</small></div>
@@ -964,7 +970,7 @@ function txRow(t){
   const cat = category(t), f = FUNDS[t.fund] || FUNDS.personal;
   const inc = t.fund === "income";
   const sel = S.sel, on = sel && sel.has(t.id);
-  return `<button class="tx${on?" sel":""}" data-act="${sel?"tx-toggle":"edit-tx"}" data-id="${esc(t.id)}" ${sel?`role="checkbox" aria-checked="${!!on}"`:""}>${sel?`<span class="ck" aria-hidden="true">${on?"✓":""}</span>`:""}<span class="av" style="background:${f.color}">${esc((t.desc||"?").trim().charAt(0).toUpperCase())}</span><span class="mid"><span class="d" style="display:block">${t.star ? "★ " : ""}${esc(t.desc||"Untitled")}</span><span class="c">${(t.tags||[]).length ? (t.tags.map(g => "#" + esc(g)).join(" ") + " • ") : ""}${t.details?esc(t.details)+" • ":""}${esc(cat)}${t.fund!=="personal"&&!inc?" • "+f.label+" fund":""}${t.src&&t.src!=="sheet"&&t.src!=="manual"?" • "+esc(SOURCES[t.src]||t.src):""}</span></span><span class="a num ${inc||t.amount<0?"inc":""}">${inc?money(t.amount,{sign:true}):t.amount<0?"+"+money(-t.amount):money(t.amount)}</span></button>`;
+  return `<button class="tx${on?" sel":""}" data-act="${sel?"tx-toggle":"edit-tx"}" data-id="${esc(t.id)}" ${sel?`role="checkbox" aria-checked="${!!on}"`:""}>${sel?`<span class="ck" aria-hidden="true">${on?"✓":""}</span>`:""}<span class="av" style="background:${f.color}">${esc((t.desc||"?").trim().charAt(0).toUpperCase())}</span><span class="mid"><span class="d" style="display:block">${t.star ? "★ " : ""}${esc(t.desc||"Untitled")}${t.rcpt ? " 📎" : ""}</span><span class="c">${(t.tags||[]).length ? (t.tags.map(g => "#" + esc(g)).join(" ") + " • ") : ""}${t.details?esc(t.details)+" • ":""}${esc(cat)}${t.fund!=="personal"&&!inc?" • "+f.label+" fund":""}${t.src&&t.src!=="sheet"&&t.src!=="manual"?" • "+esc(SOURCES[t.src]||t.src):""}</span></span><span class="a num ${inc||t.amount<0?"inc":""}">${inc?money(t.amount,{sign:true}):t.amount<0?"+"+money(-t.amount):money(t.amount)}</span></button>`;
 }
 
 /* ---------- review ---------- */
@@ -1051,6 +1057,7 @@ function viewReview(){
       <div class="row" style="justify-content:space-between"><span class="small muted">${esc(where)}</span>
       <div class="acts"><button class="btn danger sm" data-act="deny" data-id="${esc(it.id)}">Deny</button><button class="btn ghost sm" data-act="edit-item" data-id="${esc(it.id)}">Edit</button><button class="btn sm" data-act="confirm" data-id="${esc(it.id)}">Confirm</button></div></div>
       ${it.note?`<div class="note">${esc(it.note)}</div>`:""}
+      ${(() => { const ch = canceledHit(it); return ch ? `<div class="note" style="background:var(--debt);color:#fff;font-weight:700">⚠ You canceled ${esc(ch.name)} on ${esc(short(ch.when))}, but it charged you again.</div>` : ""; })()}
     </article>`;
   }).join("");
   const dupHtml = dups.length ? `<details class="dups"><summary>${dups.length} hidden as duplicates</summary><p class="small" style="margin:0 0 8px"><button class="btn ghost sm" data-act="open-merges">Check all merges</button></p>${dups.map(it => `<article class="rv"><div class="top"><div class="mid"><div class="desc">${esc(it.desc)}</div><div class="meta">${esc(short(it.date))} • <span class="chip">${esc(SOURCES[it.src]||it.src)}</span></div></div><div class="amt num">${money(Math.abs(it.flow))}</div></div><div class="note">${esc(it.dupNote||"Matches another charge")}</div><div class="acts" style="margin-top:10px"><button class="btn ghost sm" data-act="dismiss-dup" data-id="${esc(it.id)}">It’s a duplicate</button><button class="btn sm" data-act="undup" data-id="${esc(it.id)}">Not a duplicate</button></div></article>`).join("")}</details>` : "";
@@ -1170,7 +1177,8 @@ function syncPanel(){
 function viewSettings(){
   const st = S.settings, pct = v => Math.round(v*10000)/100;
   const nRules = Object.keys(S.rules.map||{}).length;
-  return `<div class="topbar"><h1>Settings</h1></div>
+  return `<div class="topbar"><h1>Settings</h1><button class="btn ghost sm" data-act="jump" aria-label="Jump anywhere">Jump to…</button></div>
+  <input class="input" id="setq" type="search" placeholder="Search settings, like “merge” or “backup”" value="${esc(S.setq || "")}" style="margin-bottom:12px" autocomplete="off">
   <div class="panel"><h2 style="margin-bottom:6px">Update the app</h2>
     <p class="muted" style="margin:0 0 12px">Choose the Payday-app.zip you were given and it’s published to your site for you. On your phone, it’s more reliable to share the zip to Payday: tap it in the Claude app or Files, tap <b style="color:var(--ink)">Share</b>, then pick <b style="color:var(--ink)">Payday</b>.</p>
     <label class="field"><span>GitHub repo</span><input class="input" id="gh-repo" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="yourname/payday" value="${esc(ghCfg().repo || ghGuessRepo())}"></label>
@@ -1211,10 +1219,15 @@ function viewSettings(){
       <label class="btn ghost" style="display:inline-flex;align-items:center;cursor:pointer">Restore from backup<input type="file" id="restoreIn" accept="*/*" style="position:absolute;width:1px;height:1px;opacity:0"></label>
     </div>
     <p class="small muted" style="margin:12px 0 0">A backup is one file. Keep a copy in Google Drive or email it to yourself. To move your data to another phone or computer, back up here and restore it there.</p>
-    <div class="row" style="margin-top:12px"><button class="btn ghost" data-act="open-rules">Your rules (${ruleCount()})</button><button class="btn ghost" data-act="open-cats">Your categories</button><button class="btn ghost" data-act="open-tags">Tags</button><button class="btn ghost" data-act="open-merge">Merge merchant names</button><button class="btn ghost" data-act="recon-open">Match a statement</button><button class="btn ghost" data-act="open-health">Health check${(() => { const n = healthIssues().length; return n ? ` (${n})` : ""; })()}</button><button class="btn ghost" data-act="open-history">Change history</button><button class="btn ghost" data-act="open-merges">Check merges</button><button class="btn ghost" data-act="xlsx-open">Export like my spreadsheet (.xlsx)</button><button class="btn ghost" data-act="export">Export to spreadsheet (CSV)</button>${nRules?'<button class="btn ghost" data-act="clear-rules">Forget learned merchants</button>':""}</div>
+  </div>
+  <div class="panel"><h2 style="margin-bottom:6px">Tools</h2>
+    <div class="row"><button class="btn ghost" data-act="open-rules">Your rules (${ruleCount()})</button><button class="btn ghost" data-act="open-cats">Your categories</button><button class="btn ghost" data-act="open-tags">Tags</button><button class="btn ghost" data-act="open-merge">Merge merchant names</button><button class="btn ghost" data-act="recon-open">Match a statement</button><button class="btn ghost" data-act="open-health">Health check${(() => { const n = healthIssues().length; return n ? ` (${n})` : ""; })()}</button><button class="btn ghost" data-act="open-history">Change history</button><button class="btn ghost" data-act="open-merges">Check merges</button><button class="btn ghost" data-act="xlsx-open">Export like my spreadsheet (.xlsx)</button><button class="btn ghost" data-act="export">Export to spreadsheet (CSV)</button>${nRules?'<button class="btn ghost" data-act="clear-rules">Forget learned merchants</button>':""}</div>
   </div>
   <div class="panel"><h2 style="margin-bottom:6px">Appearance</h2>
-    <div class="seg">${[["auto","Match phone"],["light","Light"],["dark","Dark"]].map(([k,l]) => `<button data-act="theme" data-t="${k}" aria-pressed="${(document.documentElement.dataset.theme||"auto")===k}">${l}</button>`).join("")}</div>
+    <div class="small muted" style="margin:0 0 6px">Colors</div>
+    <div class="seg" style="margin-bottom:12px">${[["auto","Match phone"],["light","Light"],["dark","Dark"]].map(([k,l]) => `<button data-act="theme" data-t="${k}" aria-pressed="${(document.documentElement.dataset.theme||"auto")===k}">${l}</button>`).join("")}</div>
+    <div class="small muted" style="margin:12px 0 6px">Text size (this device)</div>
+    <div class="seg">${[["0.9","Small"],["1","Normal"],["1.15","Large"],["1.3","Extra large"]].map(([k,l]) => `<button data-act="textsize" data-z="${k}" aria-pressed="${(lsGet("payday-zoom") || "1") === k}">${l}</button>`).join("")}</div>
   </div>`;
 }
 
@@ -1513,6 +1526,7 @@ function closeSheet(){ $("#sheetRoot").innerHTML = ""; if (S.deferRender){ S.def
 function fundPicker(cur, opts){ return `<div class="seg" id="fundPick">${opts.map(f => `<button type="button" data-pickf="${f}" aria-pressed="${cur===f}"><span class="sw" style="background:${FUNDS[f].color}"></span>${FUNDS[f].label}</button>`).join("")}</div>`; }
 function txSheet(t){
   const isNew = !t;
+  if (t && t.rcpt) setTimeout(() => loadReceipt(t.id), 30);
   t = t || {id:"", date: todayIso(), desc:"", amount:"", fund:"personal"};
   openSheet(`<h2>${isNew?"Add a transaction":"Edit transaction"}</h2>
     <label class="field"><input class="input bigamt num" id="t-amt" inputmode="decimal" placeholder="$0.00" value="${t.amount===""?"":r2(t.amount)}" aria-label="Amount"><small style="text-align:center">Use a minus sign for a refund, like −24.64</small></label>
@@ -1521,6 +1535,7 @@ function txSheet(t){
     <label class="field"><span>Details</span><input class="input" id="t-details" value="${esc(t.details||"")}" placeholder="What it was for, who it was with…"></label>
     <label class="field"><span>Category</span>${catSelect("t-cat", t.cat || "")}</label>
     <label class="field"><span>Tags</span>${tagInput("t-tags", t.tags)}</label>
+    ${isNew ? "" : `<div class="field"><span>Receipt photo</span>${t.rcpt ? `<div id="rcpt-box" class="small muted" style="margin:4px 0 8px"><span class="spinner"></span> Loading…</div>` : ""}<div class="row"><label class="btn ghost sm" style="display:inline-flex;align-items:center;cursor:pointer">${t.rcpt ? "Replace photo" : "📷 Add a receipt photo"}<input type="file" id="rcptIn" data-id="${esc(t.id)}" accept="image/*" style="position:absolute;width:1px;height:1px;opacity:0"></label>${t.rcpt ? `<button class="btn ghost sm" data-act="rcpt-del" data-id="${esc(t.id)}">Remove photo</button>` : ""}</div></div>`}
     ${isNew ? "" : `<div class="field"><label class="row" style="gap:10px;flex-wrap:nowrap;cursor:pointer"><input type="checkbox" id="t-star" style="width:22px;height:22px" ${t.star ? "checked" : ""}><span><b>☆ Star to follow up</b></span></label><input class="input" id="t-starnote" value="${esc((t.star && t.star.note) || "")}" placeholder="Why? e.g. warranty, ask dad, dispute" style="margin-top:6px"></div>`}
     <label class="field"><span>Date</span><input class="input" type="date" id="t-date" value="${t.date}"></label>
     <div class="field"><span>Which fund</span>${fundPicker(t.fund, ["personal","gas","debt","income","savings"])}</div>
@@ -1724,6 +1739,7 @@ function closeoutSheet(p){
       ${item(!I.amazonUnlabeled, I.amazonUnlabeled ? `<b>${I.amazonUnlabeled}</b> Amazon charge${I.amazonUnlabeled===1?"":"s"} without a label` : "Amazon charges labeled", `<button class="btn ghost sm" data-act="co-amazon" data-p="${p}">Label</button>`)}
       ${item(!I.unmatched.length, I.unmatched.length ? `Statement not matched yet: ${esc(I.unmatched.map(u => SOURCES[u.src] + " (" + monthName(u.month) + ")").join(", "))}` : "Statements matched", `<button class="btn ghost sm" data-act="recon-open" data-src="${esc((I.unmatched[0] || {}).src || "")}" data-m="${esc((I.unmatched[0] || {}).month || "")}">Match</button>`)}
     </div>
+    ${(() => { const ins = insights(p); return ins.length ? `<h3 style="margin:16px 0 6px">Noticed this paycheck</h3><div class="list" style="padding:4px 0">${ins.map(x => `<div style="padding:6px 14px">💡 ${esc(x)}</div>`).join("")}</div>` : ""; })()}
     <h3 style="margin:16px 0 6px">Summary</h3>
     <div class="list" style="padding:0">
       <div class="row" style="justify-content:space-between;padding:8px 14px"><span>Personal spent</span><b class="num">${money(c.personalSpent)} of ${money(r2(c.personalBudget + c.rolledIn))}</b></div>
@@ -2061,12 +2077,14 @@ function findSubscriptions(){
   return out.sort((a,b) => b.perYear - a.perYear);
 }
 function viewSubs(){
-  const subs = findSubscriptions(), total = r2(subs.reduce((a, x) => a + x.perYear, 0));
+  const subs = findSubscriptions().filter(x => !(S.settings.subCanceled || {})[x.name]), total = r2(subs.reduce((a, x) => a + x.perYear, 0));
   return `<div class="topbar"><h1 style="display:flex;align-items:center;gap:12px"><button class="iconbtn" data-tab="trends" aria-label="Back to Trends">${ICONS.left}</button>Subscriptions</h1></div>
   <p class="muted" style="margin:0 0 12px">Charges that repeat at a steady price. Just a list: nothing here changes your numbers.${subs.length ? ` Together about <b style="color:var(--ink)">${money0(total)} a year</b>.` : ""}</p>
   ${subs.length ? `<div class="list">${subs.map(x => `<div style="padding:12px 14px;border-top:1px solid var(--line)"><div class="row" style="justify-content:space-between;flex-wrap:nowrap"><button class="linkish" data-act="merchant" data-q="${esc(x.name)}" data-o="">${esc(x.name)}</button><b class="num">${money(x.price)}</b></div>
     <div class="small muted">${esc(x.freq)} • last charged ${esc(short(x.last))} • ${money(x.perYear)} a year • seen ${x.n} times</div>
-    <button class="btn ghost sm" style="margin-top:6px;min-height:30px;padding:3px 10px" data-act="sub-ignore" data-n="${esc(x.name)}">Not a subscription</button></div>`).join("")}</div>` : `<div class="list"><div class="empty">No repeating charges found yet.</div></div>`}`;
+    ${(() => { const pc = priceChange(x.name); return pc ? `<div class="small" style="margin-top:4px;color:${pc.to > pc.from ? "var(--neg)" : "var(--pos)"}">Price ${pc.to > pc.from ? "went up" : "went down"} from ${money(pc.from)} to ${money(pc.to)} in ${esc(MON[+pc.date.slice(5,7)-1])}: ${pc.to > pc.from ? "+" : "−"}${money(Math.abs(pc.to - pc.from) * (x.perYear / x.price))} a year.</div>` : ""; })()}
+    <div class="row" style="margin-top:6px"><button class="btn ghost sm" style="min-height:30px;padding:3px 10px" data-act="sub-cancel" data-n="${esc(x.name)}">I canceled it</button><button class="btn ghost sm" style="min-height:30px;padding:3px 10px" data-act="sub-ignore" data-n="${esc(x.name)}">Not a subscription</button></div></div>`).join("")}</div>` : `<div class="list"><div class="empty">No repeating charges found yet.</div></div>`}
+  ${Object.keys(S.settings.subCanceled || {}).length ? `<h3 style="margin:18px 0 6px">Canceled</h3><p class="small muted" style="margin:0 0 8px">If one of these charges you again, Review flags it in red.</p><div class="list">${Object.entries(S.settings.subCanceled).map(([n, d]) => `<div class="row" style="justify-content:space-between;flex-wrap:nowrap;padding:10px 14px;border-top:1px solid var(--line)"><span><b>${esc(n)}</b><br><span class="small muted">Canceled ${esc(short(d))}</span></span><button class="btn ghost sm" data-act="sub-uncancel" data-n="${esc(n)}">Undo</button></div>`).join("")}</div>` : ""}`;
 }
 
 /* ---------- starred charges ---------- */
@@ -2095,6 +2113,7 @@ function printReport(p){
       <div><b>Debt</b>${money(c.debtSpent)} paid</div>
     </div>
     ${c.owedIn ? `<p class="sub">Started ${money(c.owedIn)} behind from the paycheck before.</p>` : c.rolledIn ? `<p class="sub">Started with ${money(c.rolledIn)} left over from the paycheck before.</p>` : ""}
+    ${(() => { const ins = insights(p); return ins.length ? `<p class="note">${ins.map(esc).join("<br>")}</p>` : ""; })()}
     ${sec("Personal", "personal")}${sec("Gas", "gas")}${sec("Debt", "debt")}${sec("Extra income", "income")}${sec("Moved to savings", "savings")}
     <p class="foot">Made with Payday v${APP_VERSION} on ${esc(new Date().toLocaleDateString("en-US", {month:"short", day:"numeric", year:"numeric"}))}</p></div>`;
   let root = $("#printRoot"); if (!root){ root = document.createElement("div"); root.id = "printRoot"; document.body.appendChild(root); }
@@ -2136,6 +2155,120 @@ function awaySummary(){
   const closed = n("note").filter(e => /^Closed out/.test(e.text)); if (closed.length) parts.push(closed.map(e => e.text.replace(/^Closed out/, "closed")).join(", "));
   const where = [...new Set([...es, ...imps].map(e => e.devName || "other device"))].join(" and ");
   return parts.length ? {where, text: parts.join(", ")} : null;
+}
+
+
+/* ---------- tidier Settings: each section folds, plus search ---------- */
+function enhanceSettings(){
+  const open = S.setOpen || (S.setOpen = new Set(["Update the app"]));
+  const q = (S.setq || "").trim().toLowerCase();
+  document.querySelectorAll("#main > .panel").forEach(pn => {
+    const h = pn.querySelector(":scope > h2"); if (!h) return;
+    const title = h.textContent.trim(); h.classList.add("foldable"); h.setAttribute("role", "button"); h.tabIndex = 0;
+    h.dataset.fold = title;
+    const text = pn.textContent.toLowerCase();
+    if (q){ const hit = text.includes(q); pn.style.display = hit ? "" : "none"; pn.classList.toggle("fold", !hit);
+      pn.querySelectorAll("button,label.btn").forEach(b => b.classList.toggle("hit", b.textContent.toLowerCase().includes(q))); }
+    else { pn.style.display = ""; pn.classList.toggle("fold", !open.has(title)); pn.querySelectorAll(".hit").forEach(b => b.classList.remove("hit")); }
+  });
+}
+
+/* ---------- jump anywhere ---------- */
+const JUMPS = [
+  ["Paycheck", "home main funds", () => go("home")], ["Review", "confirm deny", () => go("review")], ["Import a statement", "csv pdf file", () => go("import")],
+  ["Accounts and bank pulls", "plaid chase paypal pull", () => go("accounts")], ["Trends", "charts", () => go("trends")], ["Settings", "options", () => go("settings")],
+  ["Search all charges", "find", () => { S.qMode = "all"; go("search"); }], ["Amazon charges and orders", "amazon orders label", () => { S.qMode = "amazon"; go("search"); }],
+  ["Month view", "calendar month", () => { S.month = null; go("month"); }], ["Year in review", "annual summary", () => go("year")],
+  ["Compare paychecks", "side by side", () => go("compare")], ["Category over time", "chart category", () => go("cattime")],
+  ["Subscriptions", "recurring repeating canceled", () => go("subs")], ["Starred charges", "follow up star", () => go("starred")],
+  ["Tags", "hashtag", () => go("tags")], ["Your categories", "category rename", () => go("cats")], ["Your rules", "always rename split direction learned", () => go("rules")],
+  ["Merge merchant names", "merge combine names", () => { S.mpick = []; go("merge"); }], ["Match a statement", "reconcile statement total", () => reconSheet()],
+  ["Health check", "problems issues duplicates", () => go("health")], ["Change history", "undo log", () => go("history")],
+  ["Check merges", "duplicates hidden", () => go("merges")], ["Import history", "undo import pulls", () => go("imports")],
+  ["Savings goals", "goal target", () => { go("home"); setTimeout(goalsSheet, 50); }], ["Moved money to savings", "i moved it savings", () => movedSheet()],
+  ["Close out a paycheck", "checklist closeout", () => { const d = closeoutDue()[0] || periodList().slice(-1)[0]; if (d) closeoutSheet(d); }],
+  ["Paycheck report (PDF)", "print pdf report", () => printReport(periodList()[S.pIdx === null || S.pIdx >= periodList().length ? periodList().length - 1 : S.pIdx])],
+  ["Export like my spreadsheet", "xlsx excel export", () => xlsxSheet()], ["Back up now", "backup save file", () => backupData()], ["What’s new", "version changes", () => whatsNewSheet()]
+];
+function jumpSheet(){
+  S.jsel = 0;
+  openSheet(`<h2>Jump to</h2><input class="input" id="jq" type="search" placeholder="Type a screen or a charge" autocomplete="off" style="margin-bottom:10px"><div id="jres">${jumpResults("")}</div>`);
+}
+function jumpResults(q){
+  q = q.trim().toLowerCase();
+  const screens = JUMPS.map((j, i) => ({j, i})).filter(({j}) => !q || (j[0] + " " + j[1]).toLowerCase().includes(q)).slice(0, q ? 8 : 12);
+  const charges = []; if (q.length >= 2) periodList().slice().reverse().forEach(p => (S.periods[p].txns || []).forEach(t => { if (charges.length < 8 && ((t.desc || "") + " " + (t.details || "")).toLowerCase().includes(q)) charges.push({t, p}); }));
+  S.jlist = [...screens.map(x => ({type: "s", i: x.i})), ...charges.map(x => ({type: "t", id: x.t.id}))];
+  S.jsel = Math.min(S.jsel || 0, Math.max(0, S.jlist.length - 1));
+  let k = 0;
+  return `${screens.length ? `<div class="list">${screens.map(({j, i}) => `<button class="tx ${k === S.jsel ? "kfocus" : ""}" data-act="jump-go" data-k="${k++}"><span class="mid"><span class="d">${esc(j[0])}</span></span><span class="small muted">→</span></button>`).join("")}</div>` : ""}
+    ${charges.length ? `<h3 style="margin:12px 0 6px">Charges</h3><div class="list">${charges.map(({t, p}) => `<button class="tx ${k === S.jsel ? "kfocus" : ""}" data-act="jump-go" data-k="${k++}"><span class="mid"><span class="d" style="display:block">${esc(t.desc)}</span><span class="c">${esc(short(t.date))} • ${esc(short(p))} paycheck</span></span><span class="a num">${money(+t.amount)}</span></button>`).join("")}</div>` : ""}
+    ${!screens.length && !charges.length ? `<p class="muted">Nothing matches.</p>` : ""}`;
+}
+function jumpGo(k){
+  const x = (S.jlist || [])[k]; if (!x) return; closeSheet();
+  if (x.type === "s") JUMPS[x.i][2]();
+  else { const f = findTx(x.id); if (f){ if (isClosed(f.p)) closedGuard(f.p, {type: "edit", id: x.id}); else txSheet(f.t); } }
+}
+
+/* ---------- canceled subscriptions + price changes ---------- */
+function canceledHit(it){
+  const c = S.settings.subCanceled || {}, m = merchantOf(it), when = c[m];
+  return when && it.date > when && it.flow < 0 ? {name: m, when} : null;
+}
+function priceChange(name){
+  const list = []; periodList().forEach(p => (S.periods[p].txns || []).forEach(t => { if (t.fund !== "income" && t.fund !== "savings" && +t.amount > 0 && merchantOf(t) === name) list.push(t); }));
+  list.sort((a,b) => a.date.localeCompare(b.date));
+  for (let i = list.length - 1; i > 0; i--){
+    const a = +list[i-1].amount, b = +list[i].amount;
+    if (Math.abs(a - b) > 0.009 && Math.abs(a - b) <= Math.max(1, a * 0.35)) return {from: a, to: b, date: list[i].date};
+  }
+  return null;
+}
+
+/* ---------- receipt photos (kept in Firebase, not on the device) ---------- */
+function receiptRef(id){ return store.cloud ? FB.db.collection("users").doc(store.cloud.uid).collection("receipts").doc(id) : null; }
+async function shrinkImage(file){
+  const url = URL.createObjectURL(file);
+  try{
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+    const max = 1100, k = Math.min(1, max / Math.max(img.width, img.height));
+    const c = document.createElement("canvas"); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    let q = 0.62, data = c.toDataURL("image/jpeg", q);
+    while (data.length > 700000 && q > 0.3){ q -= 0.1; data = c.toDataURL("image/jpeg", q); }
+    return data;
+  } finally { URL.revokeObjectURL(url); }
+}
+async function attachReceipt(id, file){
+  const ref = receiptRef(id); if (!ref){ toast("Turn on sync in Settings to keep receipt photos."); return; }
+  const f = findTx(id); if (!f) return;
+  try{
+    toast("Saving the photo…");
+    const data = await shrinkImage(file);
+    await ref.set({data, at: Date.now()});
+    f.t.rcpt = true; savePeriod(f.p); toast("Receipt saved."); txSheet(f.t);
+  }catch(e){ toast("Couldn’t save that photo. Try a different one."); }
+}
+async function loadReceipt(id){
+  const ref = receiptRef(id), box = $("#rcpt-box"); if (!ref || !box) return;
+  try{ const d = await ref.get(); if (d.exists && $("#rcpt-box")) $("#rcpt-box").innerHTML = `<img src="${d.data().data}" alt="Receipt" style="max-width:100%;max-height:220px;border-radius:10px;cursor:zoom-in" data-act="rcpt-full">`; else if ($("#rcpt-box")) $("#rcpt-box").textContent = "Photo not found."; }
+  catch(e){ if ($("#rcpt-box")) $("#rcpt-box").textContent = "Couldn’t load the photo. Check your connection."; }
+}
+
+/* ---------- paycheck insights (information only) ---------- */
+function insights(p){
+  const list = periodList(), i = list.indexOf(p), prev = list.slice(Math.max(0, i - 6), i); if (!prev.length) return [];
+  const catsOf = q => { const m = {}; (S.periods[q].txns || []).forEach(t => { if (t.fund === "personal" && +t.amount > 0){ const k = category(t); m[k] = (m[k] || 0) + +t.amount; } }); return m; };
+  const now = catsOf(p), out = [];
+  Object.entries(now).forEach(([k, v]) => { const avg = prev.reduce((a, q) => a + (catsOf(q)[k] || 0), 0) / prev.length; if (v >= Math.max(avg * 2, avg + 40) && v >= 40) out.push([v - avg, `${k} was ${money0(v)}, ${avg > 1 ? `about ${Math.round(v / avg * 10) / 10}× your usual ${money0(avg)}` : "more than usual"}.`]); });
+  const cnt = q => { const m = {}; (S.periods[q].txns || []).forEach(t => { if (t.fund !== "income" && t.fund !== "savings"){ const k = merchantOf(t); m[k] = (m[k] || 0) + 1; } }); return m; };
+  const cNow = cnt(p), cPrevMax = {}; list.slice(0, i).forEach(q => Object.entries(cnt(q)).forEach(([k, n]) => { cPrevMax[k] = Math.max(cPrevMax[k] || 0, n); }));
+  Object.entries(cNow).forEach(([k, n]) => { if (n >= 4 && n > (cPrevMax[k] || 0)) out.push([n * 10, `${k}: ${n} charges, your most in one paycheck.`]); });
+  const spent = calc(p).personalSpent, prevSpent = prev.map(q => calc(q).personalSpent);
+  if (prevSpent.length >= 3 && spent < Math.min(...prevSpent)) out.push([500, `Lowest Personal spending in ${prevSpent.length + 1} paychecks: ${money0(spent)}.`]);
+  const L = savingsLedger(p); if (L && L.left <= 0.004 && L.owed > 0) out.push([400, "All savings moved."]);
+  return out.sort((a,b) => b[0] - a[0]).slice(0, 4).map(x => x[1]);
 }
 
 /* ---------- savings goals ---------- */
@@ -2996,6 +3129,8 @@ document.addEventListener("click", async e => {
   if (e.target.closest("[data-gadd]")){ const box = $("#g-rows"); const div = document.createElement("div"); box.insertAdjacentHTML("beforeend", `<div class="goal-row" data-gid="${uid()}" style="display:grid;grid-template-columns:1fr 120px auto;gap:8px;align-items:center;margin-bottom:8px"><input class="input" data-g="name" placeholder="Goal, e.g. Car fund" aria-label="Goal name"><input class="input num" data-g="target" inputmode="decimal" placeholder="$ target" aria-label="Target amount"><span class="row" style="gap:4px;flex-wrap:nowrap"><button type="button" class="iconbtn" data-gmove="-1" aria-label="Move up" style="width:34px;height:34px">↑</button><button type="button" class="iconbtn" data-gdel aria-label="Remove goal" style="width:34px;height:34px">✕</button></span></div>`); box.lastElementChild.querySelector("input").focus(); return; }
   if (e.target.closest("[data-gdel]")){ e.target.closest(".goal-row").remove(); return; }
   if (e.target.closest("[data-gmove]")){ const r = e.target.closest(".goal-row"); if (r.previousElementSibling) r.parentElement.insertBefore(r, r.previousElementSibling); return; }
+  const fh = e.target.closest("h2[data-fold]");
+  if (fh && S.view === "settings"){ const t = fh.dataset.fold; S.setOpen = S.setOpen || new Set(); S.setOpen.has(t) ? S.setOpen.delete(t) : S.setOpen.add(t); enhanceSettings(); return; }
   const pd = e.target.closest("[data-pickd]");
   if (pd){ pd.parentElement.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b === pd)); return; }
   const sh = e.target.closest("[data-share]");
@@ -3107,6 +3242,13 @@ document.addEventListener("click", async e => {
   else if (a === "range"){ S.range = el.dataset.r; render(); }
   else if (a === "save-moved") movedSheet();
   else if (a === "goals-edit") goalsSheet();
+  else if (a === "jump") jumpSheet();
+  else if (a === "jump-go") jumpGo(+el.dataset.k);
+  else if (a === "sub-cancel"){ S.settings.subCanceled = {...(S.settings.subCanceled || {}), [el.dataset.n]: todayIso()}; store.save("settings", S.settings); render(); toast(`Marked ${el.dataset.n} canceled. Payday will warn you if it charges again.`); }
+  else if (a === "sub-uncancel"){ delete S.settings.subCanceled[el.dataset.n]; store.save("settings", S.settings); render(); }
+  else if (a === "rcpt-del"){ const f = findTx(id); if (f){ const ref = receiptRef(id); if (ref) ref.delete().catch(() => {}); delete f.t.rcpt; savePeriod(f.p); txSheet(f.t); toast("Photo removed."); } }
+  else if (a === "rcpt-full"){ const src = el.getAttribute("src"); openSheet(`<h2>Receipt</h2><img src="${src}" alt="Receipt" style="width:100%;border-radius:10px">`); }
+  else if (a === "textsize"){ lsSet("payday-zoom", el.dataset.z); applyZoom(); render(); }
   else if (a === "open-merge"){ S.mpick = []; go("merge"); }
   else if (a === "merge-sug"){ const xs = mergeSuggestions()[+el.dataset.i]; if (xs) applyMerge(xs.map(x => x.name), document.querySelector(`[data-merge-name="${el.dataset.i}"]`).value); }
   else if (a === "merge-picked") applyMerge(S.mpick || [], $("#m-as").value);
@@ -3287,10 +3429,13 @@ document.addEventListener("click", async e => {
   else if (a === "theme"){ const t = el.dataset.t; if (t === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t; try{ localStorage.setItem("payday-theme", t); }catch(_){} render(); }
 });
 document.addEventListener("input", e => {
+  if (e.target.id === "setq"){ S.setq = e.target.value; enhanceSettings(); }
+  if (e.target.id === "jq"){ S.jsel = 0; $("#jres").innerHTML = jumpResults(e.target.value); }
   if (e.target.id === "mq"){ S.mq = e.target.value; const pos = e.target.selectionStart; render(); const q = $("#mq"); if (q){ q.focus(); q.setSelectionRange(pos, pos); } }
   if (e.target.id === "t-desc") fillFromMerchant();
   if (e.target.id === "rc-month" && e.target.value){ const m = e.target.value, d = toD(m + "-01"); d.setMonth(d.getMonth() + 1); d.setDate(0); $("#rc-from").value = m + "-01"; $("#rc-to").value = iso(d); } if (e.target.id === "gh-repo" || e.target.id === "gh-token") ghRead(); if (e.target.id === "q"){ S.q = e.target.value; $("#qres").innerHTML = searchResults(); } });
 document.addEventListener("change", e => {
+  if (e.target.id === "rcptIn" && e.target.files.length){ attachReceipt(e.target.dataset.id, e.target.files[0]); e.target.value = ""; return; }
   if (e.target.dataset && e.target.dataset.act === "ct-cat"){ S.ctCat = e.target.value; render(); return; }
   if (e.target.dataset && e.target.dataset.mpick !== undefined){ const n = e.target.dataset.mpick; S.mpick = S.mpick || []; if (e.target.checked){ if (!S.mpick.includes(n)) S.mpick.push(n); } else S.mpick = S.mpick.filter(x => x !== n); const b = document.querySelector("[data-act=merge-picked]"); if (b) b.textContent = `Merge ${S.mpick.length || ""} picked`; if (S.mpick.length && !$("#m-as").value) $("#m-as").value = S.mpick[0]; return; }
   if (e.target.dataset && e.target.dataset.act === "rsort"){ S.rsort = e.target.value; render(); return; }
@@ -3384,12 +3529,20 @@ function reviewKey(e){
   return false;
 }
 document.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k"){ e.preventDefault(); jumpSheet(); return; }
+  if (document.activeElement && document.activeElement.id === "jq"){
+    if (e.key === "ArrowDown" || e.key === "ArrowUp"){ e.preventDefault(); S.jsel = Math.max(0, Math.min((S.jlist || []).length - 1, (S.jsel || 0) + (e.key === "ArrowDown" ? 1 : -1))); $("#jres").innerHTML = jumpResults($("#jq").value); return; }
+    if (e.key === "Enter"){ e.preventDefault(); jumpGo(S.jsel || 0); return; }
+  }
+  if (e.key === "Enter" && e.target.matches && e.target.matches("h2[data-fold]")){ e.target.click(); return; }
   if (reviewKey(e)){ e.preventDefault(); return; }
   if (e.key === "Enter" && e.target.dataset && e.target.dataset.label){ e.target.blur(); return; }
   if ((e.key === "Enter" || e.key === " ") && e.target.dataset && e.target.dataset.act === "fund-list"){ e.preventDefault(); e.target.click(); return; } if (e.key === "Escape") closeSheet(); });
 $("#fab").addEventListener("click", () => txSheet(null));
 
 try{ const t = localStorage.getItem("payday-theme"); if (t && t !== "auto") document.documentElement.dataset.theme = t; }catch(_){}
+function applyZoom(){ const z = parseFloat(lsGet("payday-zoom") || "1") || 1; document.body.style.zoom = z === 1 ? "" : String(z); }
+applyZoom();
 takeLinkFromUrl(); localBoot(); setupPWA(); initFirebase(); takeSharedFile();
 // "What changed while you were away" counts from the last time this device was used.
 if (!lsGet("payday-lastseen")) lsSet("payday-lastseen", String(Date.now()));
