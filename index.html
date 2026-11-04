@@ -1874,24 +1874,25 @@ async function reconFile(file){
     $("#rc-stmt").value = total.toFixed(2);
     reconCheck();
     const R = reconTotals(src, from, to), c = x => Math.round(x * 100), dd = (a, b) => Math.abs((toD(a) - toD(b)) / 864e5);
-    const pd = R.rows.filter(r => r.bankAmt > 0).map(r => ({r, used: false}));
+    const U = reconTotals("all", from, to).rows.filter(r => !RECON_SRCS.includes(r.src) && r.bankAmt > 0);
+    const pd = [...R.rows.filter(r => r.bankAmt > 0).map(r => ({r, used: false, loose: false})), ...U.map(r => ({r, used: false, loose: true}))];
     const pools = [["review", R.review], ["dup", R.dups], ["denied", R.denied]].map(([k, arr]) => [k, arr.map(i => ({i, used: false}))]);
-    const groups = {none: [], review: [], dup: [], denied: []}; let matched = 0;
+    const groups = {none: [], review: [], dup: [], denied: []}; let matched = 0, looseHit = 0;
     for (const x of stm){
       let best = null, bd = 99;
       for (const p of pd){ if (p.used || c(r2(p.r.bankAmt)) !== c(x.amt)) continue; const d = dd(p.r.date, x.date); if (d <= 4 && d < bd){ best = p; bd = d; } }
-      if (best){ best.used = true; matched++; continue; }
+      if (best){ best.used = true; matched++; if (best.loose) looseHit++; continue; }
       let where = "none";
       for (const [k, pool] of pools){ const h = pool.find(y => !y.used && c(Math.abs(+y.i.flow)) === c(x.amt) && dd(y.i.date, x.date) <= 4); if (h){ h.used = true; where = k; break; } }
       groups[where].push(x);
     }
-    const extra = pd.filter(p => !p.used).map(p => p.r);
+    const extra = pd.filter(p => !p.used && !p.loose).map(p => p.r);
     const row = (d, a, note) => `<div class="tx" style="cursor:default"><span class="mid"><span class="d" style="display:block">${esc(d.desc)}</span><span class="c">${esc(short(d.date))}${note ? " • " + esc(note) : ""}</span></span><b class="num">${money(a)}</b></div>`;
     const sect = (title, list, extraHtml) => list.length ? `<div style="margin-top:12px"><b>${title} (${list.length})</b>${extraHtml || ""}<div class="list" style="margin-top:6px">${list.join("")}</div></div>` : "";
     const clean = !groups.none.length && !groups.review.length && !groups.dup.length && !groups.denied.length && !extra.length;
     S.reconSend = groups.none.length ? {items: groups.none.map(x => ({date: x.date, desc: x.desc, flow: x.flow})), src: RECON_SRCS.includes(src) ? src : "other", range: [from, to], name: "Statement check: " + file.name} : null;
     box.innerHTML = `<div class="panel" style="margin:0 0 12px"><b>Line by line: ${esc(file.name)}</b>
-      <div class="small muted" style="margin-top:4px">${esc(SOURCES[src] || "Account")} • ${esc(short(from))} to ${esc(short(to))} • ${stm.length} purchase${stm.length === 1 ? "" : "s"} on the statement, ${matched} matched in Payday. Payments to cards and transfers are left out on both sides.</div>
+      <div class="small muted" style="margin-top:4px">${esc(SOURCES[src] || "Account")} • ${esc(short(from))} to ${esc(short(to))} • ${stm.length} purchase${stm.length === 1 ? "" : "s"} on the statement, ${matched} matched in Payday. Payments to cards and transfers are left out on both sides.${looseHit ? ` <b>${looseHit} of those matched charges have no account tag</b> (added by hand or from your old spreadsheet), so the total above doesn’t count them for this account.` : ""}</div>
       ${clean ? `<div style="margin-top:10px">✅ Every purchase on the statement is in Payday, and Payday has nothing extra.</div>` : ""}
       ${sect("On the statement, missing from Payday", groups.none.map(x => row(x, x.amt)), `<div class="row" style="margin:6px 0 0"><button class="btn sm" data-act="recon-send">Send these ${groups.none.length} to Review</button></div>`)}
       ${sect("On the statement, waiting in Review", groups.review.map(x => row(x, x.amt)), `<div class="small muted">Confirm them in Review and they’ll count.</div>`)}
