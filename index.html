@@ -340,8 +340,9 @@ const SOURCES = {
 };
 /* ---------- version ---------- */
 // Bump APP_VERSION (and the cache name in sw.js to match) with every update, and add a line to CHANGES.
-const APP_VERSION = 37, APP_DATE = "2026-11-01";
+const APP_VERSION = 38, APP_DATE = "2026-11-03";
 const CHANGES = [
+  [38, "2026-11-03", "Match a statement can read a CSV or PDF and check it line by line, explains empty date ranges, All accounts option, Close out button on the Paycheck screen."],
   [37, "2026-11-01", "Tidier Settings with search, Jump anywhere (Ctrl+K), canceled subscription watch, price change flags, receipt photos, paycheck insights, text size."],
   [36, "2026-11-01", "Merge merchant names, category over time, subscription list, starred charges, one-page paycheck report, sync status, what changed on your other device."],
   [35, "2026-11-01", "Tags, compare two paychecks, closed paychecks protected, sort and filter Review, import history with undo, month view."],
@@ -920,7 +921,7 @@ function viewHome(){
   ${latest && plaidUrl() ? `<button class="banner" data-act="home-pull" ${PL.busy ? "disabled" : ""}><span class="dot" style="background:var(--personal);border:1.5px solid var(--ink)"></span><span><b>${PL.busy ? `<span class="spinner"></span> ${esc(PL.busy)}` : "Pull new charges from my bank"}</b><span class="small muted">${PL.err ? esc(PL.err) : "Everything for this paycheck goes to Review"}</span></span><span class="go">${PL.busy ? "" : "Pull"}</span></button>${PL.last && !PL.busy ? `<div style="margin:-6px 0 12px;text-align:right"><button class="btn ghost sm" data-act="pull-results">See what the last pull found</button></div>` : ""}` : ""}
   ${(() => { const A = awaySummary(); return A ? `<div class="banner" style="background:var(--sunk);flex-wrap:wrap"><span>🔄</span><span style="flex:1;min-width:200px"><b>On your ${esc(A.where)}</b><span class="small muted">${esc(A.text)}.</span></span><button class="btn ghost sm" data-act="away-ok">Got it</button></div>` : ""; })()}
   <div class="row" style="justify-content:space-between;margin:-4px 0 12px"><div class="seg"><button aria-pressed="true">Paycheck</button><button data-act="view-month" aria-pressed="false">Month</button></div>
-    <span class="row" style="gap:6px">${starredList().length ? `<button class="btn ghost sm" data-act="open-starred">★ ${starredList().length} starred</button>` : ""}<button class="btn ghost sm" data-act="report" data-p="${p}">Report</button></span></div>
+    <span class="row" style="gap:6px">${starredList().length ? `<button class="btn ghost sm" data-act="open-starred">★ ${starredList().length} starred</button>` : ""}${per.closed ? "" : `<button class="btn ghost sm" data-act="co-open" data-p="${p}">Close out</button>`}<button class="btn ghost sm" data-act="report" data-p="${p}">Report</button></span></div>
   ${per.note ? `<button class="banner" data-act="edit-pay" style="background:var(--sunk)"><span>📝</span><span style="white-space:pre-wrap">${esc(per.note)}</span><span class="go small">Edit</span></button>` : ""}
   ${banners.join("")}
   <div class="home-grid">
@@ -1775,9 +1776,9 @@ function reconReminder(){
 }
 function reconTotals(src, from, to){
   const rows = [];
-  periodList().forEach(p => (S.periods[p].txns || []).forEach(t => { if (t.src === src && t.date >= from && t.date <= to && t.fund !== "income" && t.fund !== "savings") rows.push({...t, p, bankAmt: +(t.bank !== undefined ? t.bank : t.amount)}); }));
+  periodList().forEach(p => (S.periods[p].txns || []).forEach(t => { if ((src === "all" || t.src === src) && t.date >= from && t.date <= to && t.fund !== "income" && t.fund !== "savings") rows.push({...t, p, bankAmt: +(t.bank !== undefined ? t.bank : t.amount)}); }));
   const charges = r2(rows.filter(r => r.bankAmt > 0).reduce((a, r) => a + r.bankAmt, 0)), credits = r2(rows.filter(r => r.bankAmt < 0).reduce((a, r) => a - r.bankAmt, 0));
-  const inRange = i => i.src === src && i.date >= from && i.date <= to;
+  const inRange = i => (src === "all" || i.src === src) && i.date >= from && i.date <= to;
   return {rows: rows.sort((a,b) => a.date.localeCompare(b.date)), charges, credits,
     review: S.inbox.items.filter(i => i.status === "pending" && inRange(i)), dups: S.inbox.items.filter(i => i.status === "dup" && inRange(i)), denied: (S.inbox.denied || []).filter(inRange)};
 }
@@ -1788,14 +1789,15 @@ function reconSheet(src, month){
   openSheet(`<h2>Match a statement</h2>
     <p class="muted" style="margin:-6px 0 12px">A double check that nothing was missed or counted twice. Enter the total purchases from your statement and Payday compares it to what you confirmed.</p>
     <div class="grid2">
-      <label class="field"><span>Account</span><select class="input" id="rc-src">${RECON_SRCS.map(k => `<option value="${k}" ${k===src?"selected":""}>${esc(SOURCES[k])}</option>`).join("")}</select></label>
+      <label class="field"><span>Account</span><select class="input" id="rc-src">${RECON_SRCS.map(k => `<option value="${k}" ${k===src?"selected":""}>${esc(SOURCES[k])}</option>`).join("")}<option value="all" ${src==="all"?"selected":""}>All accounts</option></select></label>
       <label class="field"><span>Month</span><input class="input" type="month" id="rc-month" value="${month}"></label>
       <label class="field"><span>From</span><input class="input" type="date" id="rc-from" value="${prev ? prev.from : from}"></label>
       <label class="field"><span>To</span><input class="input" type="date" id="rc-to" value="${prev ? prev.to : to}"></label>
     </div>
     <p class="small muted" style="margin:-6px 0 10px">Card statements usually don’t line up with the calendar month. Use the statement’s own dates if they’re different.</p>
-    <label class="field"><span>Statement’s total purchases / charges</span><input class="input num" id="rc-stmt" inputmode="decimal" placeholder="$0.00" value="${prev ? prev.stmt : ""}"><small>Not payments to the card or transfers. Those are left out of Payday on purpose.</small></label>
-    <div id="rc-out"></div>
+    <label class="field"><span>Best: compare a statement file (CSV or PDF)</span><input type="file" id="rc-file" accept="*/*"><small>Payday reads it and checks every purchase against what you confirmed, so you can see exactly what’s missing.</small></label>
+    <label class="field"><span>Or type the statement’s total purchases / charges</span><input class="input num" id="rc-stmt" inputmode="decimal" placeholder="$0.00" value="${prev ? prev.stmt : ""}"><small>Not payments to the card or transfers. Those are left out of Payday on purpose.</small></label>
+    <div id="rc-out"></div><div id="rc-detail"></div>
     <div class="row" style="justify-content:flex-end;margin-top:6px"><button class="btn ghost" data-act="close">Close</button><button class="btn" data-act="recon-check">Compare</button></div>`);
 }
 function reconCheck(){
@@ -1814,7 +1816,90 @@ function reconCheck(){
     ${ok ? "" : `<div class="small" style="margin-top:8px">${exact.length ? `<b>Probably this:</b> ${exact.map(x => `${esc(x.desc)} on ${esc(short(x.date))}`).join("; ")}.<br>` : ""}${hint.length ? `Not counted yet: ${esc(hint.join(", "))}.` : diff > 0 ? "Something on the statement may never have been pulled or imported. Compare the list below with your statement day by day." : "Something may be counted twice. Compare the list below with your statement."}</div>`}
     ${ok ? "" : `<details style="margin-top:8px"><summary class="small" style="cursor:pointer;font-weight:700">Payday’s ${R.rows.length} charges for these dates</summary><div class="list" style="margin-top:6px">${R.rows.map(r => `<div class="tx" style="cursor:default"><span class="mid"><span class="d" style="display:block">${esc(r.desc)}</span><span class="c">${esc(short(r.date))}${r.bank !== undefined ? ` • your share of ${money(r.bank)}` : ""}</span></span><span class="a num">${money(r.bankAmt)}</span></div>`).join("")}</div></details>`}
   </div>`;
+  if (!ok){
+    const W = reconWhere(from, to, src), inRev = S.inbox.items.filter(i => i.status === "pending" && i.date >= from && i.date <= to).length;
+    const parts = [];
+    if (src !== "all" && !R.rows.length) parts.push(`<b>Payday has no confirmed charges on ${esc(SOURCES[src] || src)} between ${esc(short(from))} and ${esc(short(to))}.</b>`);
+    if (W.length) parts.push(`In these dates Payday does have charges on: ${W.map(w => `${esc(SOURCES[w.src] || "Unknown account")} (${w.n}, ${money(w.amt)})${RECON_SRCS.includes(w.src) ? ` <button class="btn ghost sm" data-act="recon-use" data-src="${esc(w.src)}">Check this one</button>` : ""}`).join("; ")}.${W.some(w => !RECON_SRCS.includes(w.src)) ? " Charges added by hand, from the old spreadsheet, or from an unrecognized file can’t be tied to one account. Choose “All accounts” to include them." : ""}`);
+    if (inRev) parts.push(`${inRev} charge${inRev === 1 ? " is" : "s are"} still in Review for these dates. Only confirmed charges count here.`);
+    if (!R.rows.length && !W.length && !inRev) parts.push("Nothing has been pulled or imported for these dates yet. Use Pull on the Accounts tab, or import the statement.");
+    $("#rc-out").insertAdjacentHTML("beforeend", `<div class="small" style="margin:0 0 12px;line-height:1.55">${parts.join("<br>")}</div>`);
+  }
   toast(ok ? "Matched." : "Saved. Check what’s different below.");
+}
+function reconWhere(from, to, skip){
+  const m = {};
+  periodList().forEach(p => (S.periods[p].txns || []).forEach(t => {
+    if (t.date < from || t.date > to || t.fund === "income" || t.fund === "savings" || t.src === skip) return;
+    const a = +(t.bank !== undefined ? t.bank : t.amount); if (!(a > 0)) return;
+    const k = t.src || "unknown"; const e = m[k] = m[k] || {src: k, n: 0, amt: 0}; e.n++; e.amt = r2(e.amt + a);
+  }));
+  return Object.values(m).sort((a, b) => b.amt - a.amt);
+}
+async function readStatementFile(file){
+  if (/\.csv$/i.test(file.name) || file.type === "text/csv"){
+    const res = readTabular(parseCSV(await file.text()), "auto", file.name);
+    return {items: res.items, src: res.src};
+  }
+  if (/\.pdf$/i.test(file.name) || file.type === "application/pdf"){
+    const lines = await pdfLines(file);
+    if (!lines.join("").trim()) throw new Error("This PDF has no readable text (it may be a scan). Use the CSV download instead.");
+    let items = [];
+    if (sampleFn){
+      const chunks = []; let cur = "";
+      lines.forEach(l => { if (cur.length + l.length > 14000){ chunks.push(cur); cur = ""; } cur += l + "\n"; });
+      if (cur) chunks.push(cur);
+      for (const c of chunks) items = items.concat(cleanAI(await sampleFn.json(AI_PROMPT("bank or credit card", "Statement text:\n" + c), {modelTier: "default"})));
+    } else items = regexFromLines(lines);
+    const head = file.name + " " + lines.slice(0, 60).join(" ");
+    const src = /paypal|synchrony/i.test(head) ? (/mastercard|synchrony|cashback/i.test(head) ? "paypal_mc" : "paypal") : /amazon/i.test(head) ? "chase_amazon" : "auto";
+    return {items, src};
+  }
+  throw new Error("Use a CSV or PDF file.");
+}
+async function reconFile(file){
+  const box = $("#rc-detail"); box.innerHTML = `<div class="notice" style="margin-bottom:10px">Reading ${esc(file.name)}…</div>`;
+  try{
+    const res = await readStatementFile(file);
+    const items = res.items.filter(i => i.date && i.flow && !isNaN(i.flow));
+    if (!items.length) throw new Error("No transactions were found in that file. If it’s a PDF, try the CSV download.");
+    const sel = $("#rc-src"), src = RECON_SRCS.includes(res.src) ? res.src : sel.value;
+    sel.value = src;
+    const dates = items.map(i => i.date).sort(), from = dates[0], to = dates[dates.length - 1];
+    const mc = {}; items.forEach(i => { const k = i.date.slice(0, 7); mc[k] = (mc[k] || 0) + 1; });
+    $("#rc-from").value = from; $("#rc-to").value = to; $("#rc-month").value = Object.entries(mc).sort((a, b) => b[1] - a[1])[0][0];
+    const skip = i => { const it = {src, desc: i.desc, orig: i.desc, flow: i.flow, date: i.date}; return isCardPayment(it) || isSavingsMove(it); };
+    const stm = items.filter(i => i.flow < 0 && !skip(i)).map(i => ({date: i.date, desc: i.desc, amt: r2(-i.flow), flow: i.flow})).sort((a, b) => a.date.localeCompare(b.date));
+    const total = r2(stm.reduce((a, x) => a + x.amt, 0));
+    $("#rc-stmt").value = total.toFixed(2);
+    reconCheck();
+    const R = reconTotals(src, from, to), c = x => Math.round(x * 100), dd = (a, b) => Math.abs((toD(a) - toD(b)) / 864e5);
+    const pd = R.rows.filter(r => r.bankAmt > 0).map(r => ({r, used: false}));
+    const pools = [["review", R.review], ["dup", R.dups], ["denied", R.denied]].map(([k, arr]) => [k, arr.map(i => ({i, used: false}))]);
+    const groups = {none: [], review: [], dup: [], denied: []}; let matched = 0;
+    for (const x of stm){
+      let best = null, bd = 99;
+      for (const p of pd){ if (p.used || c(r2(p.r.bankAmt)) !== c(x.amt)) continue; const d = dd(p.r.date, x.date); if (d <= 4 && d < bd){ best = p; bd = d; } }
+      if (best){ best.used = true; matched++; continue; }
+      let where = "none";
+      for (const [k, pool] of pools){ const h = pool.find(y => !y.used && c(Math.abs(+y.i.flow)) === c(x.amt) && dd(y.i.date, x.date) <= 4); if (h){ h.used = true; where = k; break; } }
+      groups[where].push(x);
+    }
+    const extra = pd.filter(p => !p.used).map(p => p.r);
+    const row = (d, a, note) => `<div class="tx" style="cursor:default"><span class="mid"><span class="d" style="display:block">${esc(d.desc)}</span><span class="c">${esc(short(d.date))}${note ? " • " + esc(note) : ""}</span></span><b class="num">${money(a)}</b></div>`;
+    const sect = (title, list, extraHtml) => list.length ? `<div style="margin-top:12px"><b>${title} (${list.length})</b>${extraHtml || ""}<div class="list" style="margin-top:6px">${list.join("")}</div></div>` : "";
+    const clean = !groups.none.length && !groups.review.length && !groups.dup.length && !groups.denied.length && !extra.length;
+    S.reconSend = groups.none.length ? {items: groups.none.map(x => ({date: x.date, desc: x.desc, flow: x.flow})), src: RECON_SRCS.includes(src) ? src : "other", range: [from, to], name: "Statement check: " + file.name} : null;
+    box.innerHTML = `<div class="panel" style="margin:0 0 12px"><b>Line by line: ${esc(file.name)}</b>
+      <div class="small muted" style="margin-top:4px">${esc(SOURCES[src] || "Account")} • ${esc(short(from))} to ${esc(short(to))} • ${stm.length} purchase${stm.length === 1 ? "" : "s"} on the statement, ${matched} matched in Payday. Payments to cards and transfers are left out on both sides.</div>
+      ${clean ? `<div style="margin-top:10px">✅ Every purchase on the statement is in Payday, and Payday has nothing extra.</div>` : ""}
+      ${sect("On the statement, missing from Payday", groups.none.map(x => row(x, x.amt)), `<div class="row" style="margin:6px 0 0"><button class="btn sm" data-act="recon-send">Send these ${groups.none.length} to Review</button></div>`)}
+      ${sect("On the statement, waiting in Review", groups.review.map(x => row(x, x.amt)), `<div class="small muted">Confirm them in Review and they’ll count.</div>`)}
+      ${sect("On the statement, hidden as duplicates", groups.dup.map(x => row(x, x.amt)), `<div class="small muted">Payday thought these were the same as another charge. If both are real, restore one from Review.</div>`)}
+      ${sect("On the statement, but you denied them", groups.denied.map(x => row(x, x.amt)))}
+      ${sect("In Payday, not on the statement", extra.map(r => row(r, r.bankAmt, "filed in " + short(r.p) + " paycheck")), `<div class="small muted">Could be pending when the statement closed, filed under the wrong account, or counted twice.</div>`)}
+    </div>`;
+  }catch(e){ box.innerHTML = `<div class="notice" style="margin-bottom:10px;color:var(--neg)">${esc(e.message || "Couldn’t read that file.")}</div>`; }
 }
 
 /* =====================================================================
@@ -3282,6 +3367,14 @@ document.addEventListener("click", async e => {
   else if (a === "co-close"){ const p = el.dataset.p; S.periods[p].closed = {at: Date.now()}; logHist({kind: "note", text: `Closed out the ${short(p)} paycheck`}); savePeriod(p); closeSheet(); render(); toast(`The ${short(p)} paycheck is closed.`); }
   else if (a === "recon-open") reconSheet(el.dataset.src, el.dataset.m);
   else if (a === "recon-check") reconCheck();
+  else if (a === "recon-use"){ $("#rc-src").value = el.dataset.src; $("#rc-detail").innerHTML = ""; reconCheck(); }
+  else if (a === "recon-send"){
+    const x = S.reconSend; if (!x || !x.items.length) return;
+    const r = {id: uid(), name: x.name, state: "parsing", flip: false, items: x.items, src: x.src, range: x.range};
+    S.imports.unshift(r); addImport(r); S.reconSend = null;
+    const b = el; if (b) { b.disabled = true; b.textContent = "Sent to Review"; }
+    toast(r.msg);
+  }
   else if (a === "recon-snooze"){ S.settings.reconSnooze = el.dataset.m; store.save("settings", S.settings); render(); toast("Skipped for this month."); }
   else if (a === "open-health") go("health");
   else if (a === "health-fix"){ const x = healthIssues()[+el.dataset.i]; if (x && x.kind !== "date" && x.kind !== "big" && (isClosed(x.p) || (x.kind === "wrongp" && isClosed(periodFor(x.t.date))))) closedGuard(isClosed(x.p) ? x.p : periodFor(x.t.date), {type: "health", i: +el.dataset.i}); else healthFix(+el.dataset.i); }
@@ -3435,6 +3528,7 @@ document.addEventListener("input", e => {
   if (e.target.id === "t-desc") fillFromMerchant();
   if (e.target.id === "rc-month" && e.target.value){ const m = e.target.value, d = toD(m + "-01"); d.setMonth(d.getMonth() + 1); d.setDate(0); $("#rc-from").value = m + "-01"; $("#rc-to").value = iso(d); } if (e.target.id === "gh-repo" || e.target.id === "gh-token") ghRead(); if (e.target.id === "q"){ S.q = e.target.value; $("#qres").innerHTML = searchResults(); } });
 document.addEventListener("change", e => {
+  if (e.target.id === "rc-file" && e.target.files.length){ reconFile(e.target.files[0]); e.target.value = ""; return; }
   if (e.target.id === "rcptIn" && e.target.files.length){ attachReceipt(e.target.dataset.id, e.target.files[0]); e.target.value = ""; return; }
   if (e.target.dataset && e.target.dataset.act === "ct-cat"){ S.ctCat = e.target.value; render(); return; }
   if (e.target.dataset && e.target.dataset.mpick !== undefined){ const n = e.target.dataset.mpick; S.mpick = S.mpick || []; if (e.target.checked){ if (!S.mpick.includes(n)) S.mpick.push(n); } else S.mpick = S.mpick.filter(x => x !== n); const b = document.querySelector("[data-act=merge-picked]"); if (b) b.textContent = `Merge ${S.mpick.length || ""} picked`; if (S.mpick.length && !$("#m-as").value) $("#m-as").value = S.mpick[0]; return; }
