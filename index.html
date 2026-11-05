@@ -142,6 +142,12 @@ nav.tabs .navver{display:none}
 .panel > h2.foldable::after{content:"▾";font-size:16px;color:var(--muted);transition:transform .15s}
 .panel.fold > h2.foldable::after{transform:rotate(-90deg)}
 .hit{outline:3px solid var(--focus);outline-offset:2px}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.cal-h{text-align:center;font-size:12px;color:var(--muted);font-weight:700}
+.cal-d{aspect-ratio:1;border:1px solid var(--line);border-radius:8px;background:var(--surface);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0;color:var(--ink)}
+.cal-d b{font-size:13px}
+.cal-d i{font-style:normal;font-size:10px;color:#161616}
+.cal-d.on{outline:3px solid var(--ink)}
 .fund .mini{grid-column:2/4;height:4px;border-radius:2px;background:var(--sunk);margin-top:8px;overflow:hidden}
 .fund .mini i{display:block;height:100%}
 .fund.clickable{cursor:pointer}
@@ -340,8 +346,9 @@ const SOURCES = {
 };
 /* ---------- version ---------- */
 // Bump APP_VERSION (and the cache name in sw.js to match) with every update, and add a line to CHANGES.
-const APP_VERSION = 38, APP_DATE = "2026-11-03";
+const APP_VERSION = 39, APP_DATE = "2026-11-05";
 const CHANGES = [
+  [39, "2026-11-05", "Combined: filter a paycheck’s list, one-offs left out of averages, notes on a place, link from the Amazon orders list, spending calendar, backup check, download all receipts."],
   [38, "2026-11-03", "Match a statement can read a CSV or PDF and check it line by line, explains empty date ranges, All accounts option, Close out button on the Paycheck screen."],
   [37, "2026-11-01", "Tidier Settings with search, Jump anywhere (Ctrl+K), canceled subscription watch, price change flags, receipt photos, paycheck insights, text size."],
   [36, "2026-11-01", "Merge merchant names, category over time, subscription list, starred charges, one-page paycheck report, sync status, what changed on your other device."],
@@ -766,7 +773,7 @@ function amzOrdersList(){
   const q = (S.q || "").trim().toLowerCase();
   const rows = ships.filter(sh => !q || sh.items.join(" ").toLowerCase().includes(q) || sh.order.includes(q) || sh.total.toFixed(2).includes(q)).slice(0, 300);
   return `<p class="small muted" style="margin:0 0 8px">${rows.length} shipment${rows.length===1?"":"s"}, newest first.</p><div class="list">${rows.map(sh => { const c = byKey[sh.key] || (() => { const o = Object.keys(byKey).find(k => k === "o|" + sh.order); return o ? byKey[o] : null; })();
-    return `<div class="tx" style="cursor:default;align-items:flex-start"><span class="mid"><span class="d" style="display:block;white-space:normal">${esc(amzLabel(sh))}</span><span class="c">Shipped ${esc(short(sh.ship))} • #${esc(sh.order)}<br>${c ? `Linked to the ${money(c.amt)} charge on ${esc(short(c.date))}` : "No charge linked yet"}</span></span><span class="a num">${money(sh.total)}</span></div>`; }).join("")}</div>`;
+    return `<div class="tx" style="cursor:default;align-items:flex-start"><span class="mid"><span class="d" style="display:block;white-space:normal">${esc(amzLabel(sh))}</span><span class="c">Shipped ${esc(short(sh.ship))} • #${esc(sh.order)}<br>${c ? `Linked to the ${money(c.amt)} charge on ${esc(short(c.date))}` : "No charge linked yet"}</span>${c ? "" : `<button class="btn ghost sm" style="margin-top:6px;min-height:30px;padding:3px 10px" data-act="amz-pickcharge" data-key="${esc(sh.key)}">Link a charge</button>`}</span><span class="a num">${money(sh.total)}</span></div>`; }).join("")}</div>`;
 }
 
 /* ---------- search (with Amazon labeling) ---------- */
@@ -896,12 +903,15 @@ function viewHome(){
     if (L && L.left > 0.004) banners.push(`<button class="banner" data-act="save-moved" style="border-color:var(--savings)"><span class="dot" style="background:var(--savings)"></span><span><b>Move ${money(L.left)} to savings</b><span class="small muted">${L.before > 0.004 ? `${money(L.before)} left over from before + ` : ""}${money(r2(L.owed - L.moved))} from this paycheck. Tap when it’s moved.</span></span><span class="go">I moved it</span></button>`); }
   { const due = closeoutDue()[0]; if (due) banners.push(`<button class="banner" data-act="co-open" data-p="${due}"><span class="dot" style="background:var(--ink)"></span><span><b>Close out the ${esc(short(due))} paycheck</b><span class="small muted">A quick checklist before you move on</span></span><span class="go">Close out</span></button>`); }
   { const R = reconReminder(); if (R && latest) banners.push(`<div class="banner" style="flex-wrap:wrap"><span class="dot" style="background:var(--income)"></span><span style="flex:1;min-width:200px"><b>Double-check ${esc(monthName(R.month))} statements</b><span class="small muted">${esc(R.due.map(d => SOURCES[d.src]).join(", "))}</span></span><span class="row" style="gap:6px"><button class="btn sm" data-act="recon-open" data-src="${esc(R.due[0].src)}" data-m="${esc(R.month)}">Match</button><button class="btn ghost sm" data-act="recon-snooze" data-m="${esc(R.month)}">Skip this month</button></span></div>`); }
+  { const w = latest ? backupWarning() : null; if (w) banners.push(`<button class="banner" data-act="open-settings-sync"><span class="dot" style="background:var(--debt)"></span><span><b>Backups may have stopped</b><span class="small muted">${esc(w)}</span></span><span class="go">Check</span></button>`); }
   if (nPend) banners.push(`<button class="banner" data-tab="review"><span class="dot" style="background:var(--debt)"></span><span><b>${nPend} charge${nPend>1?"s":""} waiting for review</b><span class="small muted">From your imported statements</span></span><span class="go">Review</span></button>`);
   const lb = lastBackup();
   if (!(FB.user && driveOn()) && (!lb || Math.round((toD(today) - toD(lb)) / 864e5) >= 14)) banners.push(`<button class="banner" data-act="backup"><span class="dot" style="background:var(--gas)"></span><span><b>${lb ? "Time for a backup" : "Back up your data"}</b><span class="small muted">${lb ? "Last one was " + short(lb) : "Everything is saved only on this device"}</span></span><span class="go">Back up</span></button>`);
   if (latest && today >= addDays(nextPay, -1)) banners.push(`<button class="banner" data-act="new-period"><span class="dot" style="background:var(--savings)"></span><span><b>Payday on ${short(nextPay)}?</b><span class="small muted">Start the next paycheck</span></span><span class="go">Start</span></button>`);
 
-  const txns = (per.txns || []).slice().sort((a,b) => b.date.localeCompare(a.date) || 0);
+  const allTx = (per.txns || []).slice().sort((a,b) => b.date.localeCompare(a.date) || 0);
+  const PF = S.pf || {};
+  const txns = allTx.filter(t => (!PF.fund || t.fund === PF.fund) && (!PF.star || t.star) && (!PF.rcpt || t.rcpt) && (!PF.cat || rawCategory(t) === PF.cat) && (!PF.tag || (t.tags || []).includes(PF.tag)));
   const byDay = {};
   txns.forEach(t => (byDay[t.date] = byDay[t.date] || []).push(t));
   const txHtml = txns.length ? Object.keys(byDay).sort().reverse().map(d => {
@@ -950,6 +960,7 @@ function viewHome(){
       ${goalsCard()}
     </div>
     <div class="col-right">
+      ${allTx.length > 4 ? payFilterBar(allTx) : ""}
       <div class="section-h"><h2>Transactions</h2>${S.sel?"":`<span class="small muted num">${txns.length} item${txns.length===1?"":"s"}${txns.length?` <button class="btn ghost sm" data-act="tx-select" style="margin-left:8px">Select</button>`:""}</span>`}</div>
       ${S.sel ? `<div class="selbar"><span class="grow small muted num">${S.sel.size} selected</span><button class="btn ghost sm" data-act="tx-select-all">${S.sel.size===txns.length?"Clear":"Select all"}</button><button class="btn ghost sm" data-act="tx-select-cancel">Cancel</button><button class="btn danger sm" data-act="tx-bulk-delete" ${S.sel.size?"":"disabled"}>Delete${S.sel.size?" "+S.sel.size:""}</button></div>
       <div class="row" style="gap:8px;margin:-4px 0 12px">
@@ -971,7 +982,7 @@ function txRow(t){
   const cat = category(t), f = FUNDS[t.fund] || FUNDS.personal;
   const inc = t.fund === "income";
   const sel = S.sel, on = sel && sel.has(t.id);
-  return `<button class="tx${on?" sel":""}" data-act="${sel?"tx-toggle":"edit-tx"}" data-id="${esc(t.id)}" ${sel?`role="checkbox" aria-checked="${!!on}"`:""}>${sel?`<span class="ck" aria-hidden="true">${on?"✓":""}</span>`:""}<span class="av" style="background:${f.color}">${esc((t.desc||"?").trim().charAt(0).toUpperCase())}</span><span class="mid"><span class="d" style="display:block">${t.star ? "★ " : ""}${esc(t.desc||"Untitled")}${t.rcpt ? " 📎" : ""}</span><span class="c">${(t.tags||[]).length ? (t.tags.map(g => "#" + esc(g)).join(" ") + " • ") : ""}${t.details?esc(t.details)+" • ":""}${esc(cat)}${t.fund!=="personal"&&!inc?" • "+f.label+" fund":""}${t.src&&t.src!=="sheet"&&t.src!=="manual"?" • "+esc(SOURCES[t.src]||t.src):""}</span></span><span class="a num ${inc||t.amount<0?"inc":""}">${inc?money(t.amount,{sign:true}):t.amount<0?"+"+money(-t.amount):money(t.amount)}</span></button>`;
+  return `<button class="tx${on?" sel":""}" data-act="${sel?"tx-toggle":"edit-tx"}" data-id="${esc(t.id)}" ${sel?`role="checkbox" aria-checked="${!!on}"`:""}>${sel?`<span class="ck" aria-hidden="true">${on?"✓":""}</span>`:""}<span class="av" style="background:${f.color}">${esc((t.desc||"?").trim().charAt(0).toUpperCase())}</span><span class="mid"><span class="d" style="display:block">${t.star ? "★ " : ""}${esc(t.desc||"Untitled")}${t.rcpt ? " 📎" : ""}</span><span class="c">${t.oneoff ? "One-off • " : ""}${(t.tags||[]).length ? (t.tags.map(g => "#" + esc(g)).join(" ") + " • ") : ""}${t.details?esc(t.details)+" • ":""}${esc(cat)}${t.fund!=="personal"&&!inc?" • "+f.label+" fund":""}${t.src&&t.src!=="sheet"&&t.src!=="manual"?" • "+esc(SOURCES[t.src]||t.src):""}</span></span><span class="a num ${inc||t.amount<0?"inc":""}">${inc?money(t.amount,{sign:true}):t.amount<0?"+"+money(-t.amount):money(t.amount)}</span></button>`;
 }
 
 /* ---------- review ---------- */
@@ -1058,6 +1069,7 @@ function viewReview(){
       <div class="row" style="justify-content:space-between"><span class="small muted">${esc(where)}</span>
       <div class="acts"><button class="btn danger sm" data-act="deny" data-id="${esc(it.id)}">Deny</button><button class="btn ghost sm" data-act="edit-item" data-id="${esc(it.id)}">Edit</button><button class="btn sm" data-act="confirm" data-id="${esc(it.id)}">Confirm</button></div></div>
       ${it.note?`<div class="note">${esc(it.note)}</div>`:""}
+      ${(() => { const n = (S.settings.merchantNotes || {})[merchantOf(it)]; return n ? `<div class="note">📝 ${esc(n)}</div>` : ""; })()}
       ${(() => { const ch = canceledHit(it); return ch ? `<div class="note" style="background:var(--debt);color:#fff;font-weight:700">⚠ You canceled ${esc(ch.name)} on ${esc(short(ch.when))}, but it charged you again.</div>` : ""; })()}
     </article>`;
   }).join("");
@@ -1170,7 +1182,9 @@ function syncPanel(){
     <div class="row"><button class="btn ghost sm" data-act="fb-link">Copy link for another device</button><button class="btn ghost sm" data-act="fb-signout">Sign out</button></div>
     <h3 style="margin:18px 0 6px">Google Drive</h3>
     <p class="muted" style="margin:0 0 10px">${driveOn() ? `A dated copy goes in the “Payday backups” folder in your Drive once a day, the first time you tap in the app. If Google pops up for a second, that’s it getting permission. The last 60 days are kept. Last Drive backup: ${last ? short(last) : "not yet"}.` : "Daily Drive backups are off."}</p>
-    <div class="row">${driveOn() ? `<button class="btn sm" data-act="drive-now" ${driveBusy?"disabled":""}>${driveBusy ? '<span class="spinner"></span> Backing up' : "Back up to Drive now"}</button><button class="btn ghost sm" data-act="drive-off">Turn off</button>` : `<button class="btn sm" data-act="drive-on">Turn on daily Drive backups</button>`}</div>
+    ${(() => { const w = backupWarning(); return w ? `<div class="notice" style="color:var(--neg);margin:0 0 10px">⚠ ${esc(w)}</div>` : ""; })()}
+    ${S.bcheck && !S.bcheck.busy ? `<div class="notice" style="margin:0 0 10px">${S.bcheck.ok ? "✅" : "⚠"} ${S.bcheck.msg}</div>` : ""}
+    <div class="row">${driveOn() ? `<button class="btn sm" data-act="drive-now" ${driveBusy?"disabled":""}>${driveBusy ? '<span class="spinner"></span> Backing up' : "Back up to Drive now"}</button><button class="btn ghost sm" data-act="drive-check" ${S.bcheck && S.bcheck.busy ? "disabled" : ""}>${S.bcheck && S.bcheck.busy ? '<span class="spinner"></span> Checking' : "Check my backups"}</button><button class="btn ghost sm" data-act="drive-off">Turn off</button>` : `<button class="btn sm" data-act="drive-on">Turn on daily Drive backups</button>`}</div>
     <h3 style="margin:18px 0 6px">Undo a mistake</h3>
     <p class="muted" style="margin:0 0 8px">A copy is also saved in your Firebase project once a day (last 30 days). Go back to one if something gets deleted by accident.</p>
     ${snaps}</div>`;
@@ -1222,7 +1236,7 @@ function viewSettings(){
     <p class="small muted" style="margin:12px 0 0">A backup is one file. Keep a copy in Google Drive or email it to yourself. To move your data to another phone or computer, back up here and restore it there.</p>
   </div>
   <div class="panel"><h2 style="margin-bottom:6px">Tools</h2>
-    <div class="row"><button class="btn ghost" data-act="open-rules">Your rules (${ruleCount()})</button><button class="btn ghost" data-act="open-cats">Your categories</button><button class="btn ghost" data-act="open-tags">Tags</button><button class="btn ghost" data-act="open-merge">Merge merchant names</button><button class="btn ghost" data-act="recon-open">Match a statement</button><button class="btn ghost" data-act="open-health">Health check${(() => { const n = healthIssues().length; return n ? ` (${n})` : ""; })()}</button><button class="btn ghost" data-act="open-history">Change history</button><button class="btn ghost" data-act="open-merges">Check merges</button><button class="btn ghost" data-act="xlsx-open">Export like my spreadsheet (.xlsx)</button><button class="btn ghost" data-act="export">Export to spreadsheet (CSV)</button>${nRules?'<button class="btn ghost" data-act="clear-rules">Forget learned merchants</button>':""}</div>
+    <div class="row"><button class="btn ghost" data-act="open-rules">Your rules (${ruleCount()})</button><button class="btn ghost" data-act="open-cats">Your categories</button><button class="btn ghost" data-act="open-tags">Tags</button><button class="btn ghost" data-act="open-merge">Merge merchant names</button><button class="btn ghost" data-act="recon-open">Match a statement</button><button class="btn ghost" data-act="open-health">Health check${(() => { const n = healthIssues().length; return n ? ` (${n})` : ""; })()}</button><button class="btn ghost" data-act="open-history">Change history</button><button class="btn ghost" data-act="open-merges">Check merges</button><button class="btn ghost" data-act="xlsx-open">Export like my spreadsheet (.xlsx)</button><button class="btn ghost" data-act="rcpt-zip-open">Download receipts</button><button class="btn ghost" data-act="export">Export to spreadsheet (CSV)</button>${nRules?'<button class="btn ghost" data-act="clear-rules">Forget learned merchants</button>':""}</div>
   </div>
   <div class="panel"><h2 style="margin-bottom:6px">Appearance</h2>
     <div class="small muted" style="margin:0 0 6px">Colors</div>
@@ -1531,12 +1545,13 @@ function txSheet(t){
   t = t || {id:"", date: todayIso(), desc:"", amount:"", fund:"personal"};
   openSheet(`<h2>${isNew?"Add a transaction":"Edit transaction"}</h2>
     <label class="field"><input class="input bigamt num" id="t-amt" inputmode="decimal" placeholder="$0.00" value="${t.amount===""?"":r2(t.amount)}" aria-label="Amount"><small style="text-align:center">Use a minus sign for a refund, like −24.64</small></label>
-    ${isNew ? "" : `<p style="margin:-6px 0 12px"><button class="btn ghost sm" data-act="merchant" data-q="${esc(t.desc)}" data-o="${esc(t.orig || "")}">See every charge from “${esc(t.desc)}”</button></p>`}
+    ${isNew ? "" : `<p style="margin:-6px 0 12px"><button class="btn ghost sm" data-act="merchant" data-q="${esc(t.desc)}" data-o="${esc(t.orig || "")}">See every charge from “${esc(t.desc)}”</button></p>${(() => { const n = (S.settings.merchantNotes || {})[merchantOf(t)]; return n ? `<div class="note" style="margin:-4px 0 12px">📝 ${esc(merchantOf(t))}: ${esc(n)}</div>` : ""; })()}`}
     <label class="field"><span>What was it?</span><input class="input" id="t-desc" value="${esc(t.desc)}" placeholder="Where it was charged" ${isNew ? `list="merchant-list" data-new="1" autocomplete="off"` : ""}>${isNew ? `<datalist id="merchant-list">${merchantIndex().slice(0, 200).map(e => `<option value="${esc(e.desc)}">`).join("")}</datalist><small id="t-fillnote"></small>` : ""}</label>
     <label class="field"><span>Details</span><input class="input" id="t-details" value="${esc(t.details||"")}" placeholder="What it was for, who it was with…"></label>
     <label class="field"><span>Category</span>${catSelect("t-cat", t.cat || "")}</label>
     <label class="field"><span>Tags</span>${tagInput("t-tags", t.tags)}</label>
     ${isNew ? "" : `<div class="field"><span>Receipt photo</span>${t.rcpt ? `<div id="rcpt-box" class="small muted" style="margin:4px 0 8px"><span class="spinner"></span> Loading…</div>` : ""}<div class="row"><label class="btn ghost sm" style="display:inline-flex;align-items:center;cursor:pointer">${t.rcpt ? "Replace photo" : "📷 Add a receipt photo"}<input type="file" id="rcptIn" data-id="${esc(t.id)}" accept="image/*" style="position:absolute;width:1px;height:1px;opacity:0"></label>${t.rcpt ? `<button class="btn ghost sm" data-act="rcpt-del" data-id="${esc(t.id)}">Remove photo</button>` : ""}</div></div>`}
+    <div class="field"><label class="row" style="gap:10px;flex-wrap:nowrap;cursor:pointer"><input type="checkbox" id="t-oneoff" style="width:22px;height:22px" ${t.oneoff ? "checked" : ""}><span><b>One-off</b><br><span class="small muted">Still counts toward your money, but is left out of averages, insights and Category over time.</span></span></label></div>
     ${isNew ? "" : `<div class="field"><label class="row" style="gap:10px;flex-wrap:nowrap;cursor:pointer"><input type="checkbox" id="t-star" style="width:22px;height:22px" ${t.star ? "checked" : ""}><span><b>☆ Star to follow up</b></span></label><input class="input" id="t-starnote" value="${esc((t.star && t.star.note) || "")}" placeholder="Why? e.g. warranty, ask dad, dispute" style="margin-top:6px"></div>`}
     <label class="field"><span>Date</span><input class="input" type="date" id="t-date" value="${t.date}"></label>
     <div class="field"><span>Which fund</span>${fundPicker(t.fund, ["personal","gas","debt","income","savings"])}</div>
@@ -1923,7 +1938,7 @@ function healthIssues(){
   Object.values(by).forEach(g => { if (g.length < 2) return; g.sort((a,b) => a.t.date.localeCompare(b.t.date)); for (let i = 1; i < g.length; i++){ const a = g[i-1], b = g[i]; if (Math.abs(dayDiff(b.t.date, a.t.date)) <= 2 && (a.t.src !== "sheet" || b.t.src !== "sheet")) out.push({key: "dup|" + [a.t.id, b.t.id].sort().join("|"), kind: "dup", p: b.p, t: b.t, other: a, text: `Possible double entry: “${b.t.desc}” ${money(+b.t.amount)} on ${short(a.t.date)} and ${short(b.t.date)}`, fix: "Delete the second"}); } });
   // very large one-offs without a label
   const amts = all.filter(x => x.t.fund === "personal" && +x.t.amount > 0).map(x => +x.t.amount).sort((a,b) => a-b), med = amts.length ? amts[Math.floor(amts.length / 2)] : 0;
-  all.forEach(({t, p}) => { if (t.fund === "personal" && +t.amount >= Math.max(300, med * 10) && !t.details && t.src !== "sheet") out.push({key: "big|" + t.id, kind: "big", p, t, text: `Large one-off: “${t.desc}” ${money(+t.amount)} on ${short(t.date)} has no label`, fix: "Add a label"}); });
+  all.forEach(({t, p}) => { if (t.fund === "personal" && +t.amount >= Math.max(300, med * 10) && !t.details && !t.oneoff && t.src !== "sheet") out.push({key: "big|" + t.id, kind: "big", p, t, text: `Large one-off: “${t.desc}” ${money(+t.amount)} on ${short(t.date)} has no label`, fix: "Add a label"}); });
   const seenK = new Set();
   return out.filter(x => !ign.has(x.key) && !seenK.has(x.key) && seenK.add(x.key));
 }
@@ -2072,10 +2087,11 @@ function viewMonth(){
       <button class="iconbtn" data-act="month-next" ${i >= months.length - 1 ? "disabled" : ""} aria-label="Next month">${ICONS.right}</button></div></div>
   <div class="seg" style="margin-bottom:12px"><button data-act="view-paycheck" aria-pressed="false">Paycheck</button><button aria-pressed="true">Month</button></div>
   <div class="stats"><div class="stat"><div class="v num">${money0(spent)}</div><div class="k">Spent</div></div><div class="stat"><div class="v num">${money0(sumF("income"))}</div><div class="k">Extra income</div></div><div class="stat"><div class="v num" style="color:var(--pos)">${money0(sumF("savings"))}</div><div class="k">To savings</div></div></div>
+  ${spendCalendar(m, tx)}
   <div class="panel"><div class="small muted">Personal ${money(sumF("personal"))} • Gas ${money(sumF("gas"))} • Debt ${money(sumF("debt"))}</div></div>
   ${Object.keys(accts).length ? `<div class="panel"><h3 style="margin-bottom:6px">By account</h3><p class="small muted" style="margin:0 0 8px">Charges as the bank shows them, handy next to a statement.</p>${Object.entries(accts).map(([k, v]) => `<div class="cat" style="grid-template-columns:1fr auto auto"><span>${esc(SOURCES[k] || k)}</span><span class="num">${money(v)}</span><button class="btn ghost sm" data-act="recon-open" data-src="${esc(k)}" data-m="${m}" style="min-height:30px;padding:3px 10px">Match</button></div>`).join("")}</div>` : ""}
   <div class="panel"><h3 style="margin-bottom:8px">By category</h3>${cl.map(([k,v]) => `<div class="cat"><span>${esc(k)}</span><span class="b"><i style="width:${v/cmax*100}%"></i></span><span class="num">${money0(v)}</span></div>`).join("") || '<p class="muted">Nothing yet.</p>'}</div>
-  ${Object.keys(byDay).map(d => `<div class="day"><div class="dh"><span>${esc(longDay(d))}</span></div><div class="list">${byDay[d].map(txRow).join("")}</div></div>`).join("") || `<div class="list"><div class="empty">Nothing this month yet.</div></div>`}`;
+  ${Object.keys(byDay).filter(d => !S.mday || !S.mday.startsWith(m) || d === S.mday).map(d => `<div class="day"><div class="dh"><span>${esc(longDay(d))}</span></div><div class="list">${byDay[d].map(txRow).join("")}</div></div>`).join("") || `<div class="list"><div class="empty">Nothing this month yet.</div></div>`}`;
 }
 
 
@@ -2121,8 +2137,8 @@ function viewCatTime(){
   const cats = allCategories().concat(["Gas"]).filter((v, i, a) => a.indexOf(v) === i);
   const cat = S.ctCat && cats.includes(S.ctCat) ? S.ctCat : (cats.includes("Shopping") ? "Shopping" : cats[0]);
   const by = S.ctBy || "paycheck", pts = [];
-  if (by === "paycheck") periodList().forEach(p => pts.push([short(p), r2((S.periods[p].txns || []).filter(t => t.fund !== "income" && t.fund !== "savings" && rawCategory(t) === cat).reduce((a, t) => a + (+t.amount || 0), 0))]));
-  else { const m = {}; periodList().forEach(p => (S.periods[p].txns || []).forEach(t => { if (t.fund !== "income" && t.fund !== "savings" && rawCategory(t) === cat){ const k = t.date.slice(0, 7); m[k] = (m[k] || 0) + (+t.amount || 0); } })); Object.keys(m).sort().forEach(k => pts.push([monthName(k).slice(0, 3) + " " + k.slice(2, 4), r2(m[k])])); }
+  if (by === "paycheck") periodList().forEach(p => pts.push([short(p), r2((S.periods[p].txns || []).filter(t => t.fund !== "income" && t.fund !== "savings" && !t.oneoff && rawCategory(t) === cat).reduce((a, t) => a + (+t.amount || 0), 0))]));
+  else { const m = {}; periodList().forEach(p => (S.periods[p].txns || []).forEach(t => { if (t.fund !== "income" && t.fund !== "savings" && !t.oneoff && rawCategory(t) === cat){ const k = t.date.slice(0, 7); m[k] = (m[k] || 0) + (+t.amount || 0); } })); Object.keys(m).sort().forEach(k => pts.push([monthName(k).slice(0, 3) + " " + k.slice(2, 4), r2(m[k])])); }
   const vals = pts.map(x => x[1]), nz = vals.filter(v => v > 0), avg = vals.length ? vals.reduce((a,b) => a + b, 0) / vals.length : 0;
   const hi = pts.reduce((a, x) => x[1] > a[1] ? x : a, ["", -1]), lo = pts.filter(x => x[1] > 0).reduce((a, x) => x[1] < a[1] ? x : a, ["", Infinity]);
   const W = 640, H = 220, max = Math.max(1, ...vals) * 1.1, bw = (W - 50) / Math.max(1, pts.length), y = v => H - 24 - (v / max) * (H - 40);
@@ -2139,7 +2155,7 @@ function viewCatTime(){
 /* ---------- subscription list (just a list) ---------- */
 function findSubscriptions(){
   const ign = new Set(S.settings.subIgnore || []), g = {};
-  periodList().forEach(p => (S.periods[p].txns || []).forEach(t => { if (t.fund === "income" || t.fund === "savings" || +t.amount <= 0) return; const m = merchantOf(t); (g[m] = g[m] || []).push(t); }));
+  periodList().forEach(p => (S.periods[p].txns || []).forEach(t => { if (t.fund === "income" || t.fund === "savings" || +t.amount <= 0 || t.oneoff) return; const m = merchantOf(t); (g[m] = g[m] || []).push(t); }));
   const out = [];
   for (const [m, list] of Object.entries(g)){
     if (ign.has(m) || list.length < 2) continue;
@@ -2274,7 +2290,7 @@ const JUMPS = [
   ["Savings goals", "goal target", () => { go("home"); setTimeout(goalsSheet, 50); }], ["Moved money to savings", "i moved it savings", () => movedSheet()],
   ["Close out a paycheck", "checklist closeout", () => { const d = closeoutDue()[0] || periodList().slice(-1)[0]; if (d) closeoutSheet(d); }],
   ["Paycheck report (PDF)", "print pdf report", () => printReport(periodList()[S.pIdx === null || S.pIdx >= periodList().length ? periodList().length - 1 : S.pIdx])],
-  ["Export like my spreadsheet", "xlsx excel export", () => xlsxSheet()], ["Back up now", "backup save file", () => backupData()], ["What’s new", "version changes", () => whatsNewSheet()]
+  ["Export like my spreadsheet", "xlsx excel export", () => xlsxSheet()], ["Download receipts", "receipt photos zip", () => receiptsSheet()], ["Spending calendar", "calendar heatmap days", () => { S.month = null; go("month"); }], ["Back up now", "backup save file", () => backupData()], ["What’s new", "version changes", () => whatsNewSheet()]
 ];
 function jumpSheet(){
   S.jsel = 0;
@@ -2345,7 +2361,7 @@ async function loadReceipt(id){
 /* ---------- paycheck insights (information only) ---------- */
 function insights(p){
   const list = periodList(), i = list.indexOf(p), prev = list.slice(Math.max(0, i - 6), i); if (!prev.length) return [];
-  const catsOf = q => { const m = {}; (S.periods[q].txns || []).forEach(t => { if (t.fund === "personal" && +t.amount > 0){ const k = category(t); m[k] = (m[k] || 0) + +t.amount; } }); return m; };
+  const catsOf = q => { const m = {}; (S.periods[q].txns || []).forEach(t => { if (t.fund === "personal" && +t.amount > 0 && !t.oneoff){ const k = category(t); m[k] = (m[k] || 0) + +t.amount; } }); return m; };
   const now = catsOf(p), out = [];
   Object.entries(now).forEach(([k, v]) => { const avg = prev.reduce((a, q) => a + (catsOf(q)[k] || 0), 0) / prev.length; if (v >= Math.max(avg * 2, avg + 40) && v >= 40) out.push([v - avg, `${k} was ${money0(v)}, ${avg > 1 ? `about ${Math.round(v / avg * 10) / 10}× your usual ${money0(avg)}` : "more than usual"}.`]); });
   const cnt = q => { const m = {}; (S.periods[q].txns || []).forEach(t => { if (t.fund !== "income" && t.fund !== "savings"){ const k = merchantOf(t); m[k] = (m[k] || 0) + 1; } }); return m; };
@@ -2355,6 +2371,105 @@ function insights(p){
   if (prevSpent.length >= 3 && spent < Math.min(...prevSpent)) out.push([500, `Lowest Personal spending in ${prevSpent.length + 1} paychecks: ${money0(spent)}.`]);
   const L = savingsLedger(p); if (L && L.left <= 0.004 && L.owed > 0) out.push([400, "All savings moved."]);
   return out.sort((a,b) => b[0] - a[0]).slice(0, 4).map(x => x[1]);
+}
+
+
+/* ---------- filter a paycheck's list ---------- */
+function payFilterBar(all){
+  const PF = S.pf || {}, has = f => all.some(f);
+  const chip = (key, val, label) => `<button data-act="pf" data-k="${key}" data-v="${esc(val)}" aria-pressed="${String(PF[key] || "") === String(val)}">${label}</button>`;
+  const cats = [...new Set(all.map(t => rawCategory(t)))].sort(), tags = [...new Set(all.flatMap(t => t.tags || []))].sort();
+  const on = Object.values(PF).some(Boolean);
+  return `<div class="seg" style="margin:18px 0 0">${chip("fund", "", "All")}${[["personal","Personal"],["gas","Gas"],["debt","Debt"],["income","Extra income"],["savings","Savings"]].filter(([f]) => has(t => t.fund === f)).map(([f, l]) => chip("fund", f, l)).join("")}
+    ${has(t => t.star) ? chip("star", "1", "★ Starred") : ""}${has(t => t.rcpt) ? chip("rcpt", "1", "📎 Receipt") : ""}
+    <select class="input" data-act="pf-cat" style="width:auto;min-height:34px;padding:4px 8px;font-size:14px" aria-label="Category"><option value="">Any category</option>${cats.map(c => `<option value="${esc(c)}" ${PF.cat === c ? "selected" : ""}>${esc(catName(c))}</option>`).join("")}</select>
+    ${tags.length ? `<select class="input" data-act="pf-tag" style="width:auto;min-height:34px;padding:4px 8px;font-size:14px" aria-label="Tag"><option value="">Any tag</option>${tags.map(g => `<option value="${esc(g)}" ${PF.tag === g ? "selected" : ""}>#${esc(g)}</option>`).join("")}</select>` : ""}
+    ${on ? `<button data-act="pf-clear">Clear</button>` : ""}</div>`;
+}
+
+/* ---------- link from the Amazon orders list ---------- */
+function amzPickChargeSheet(key){
+  const sh = amzFind(key); if (!sh) return;
+  const used = amzLinkedKeys();
+  const cs = amzCharges().filter(c => !c.ref.amz).map(c => ({c, diff: Math.abs(c.amt - sh.total), days: dayDiff(c.date, sh.ship || sh.date)})).filter(x => Math.abs(x.days) <= 21).sort((a,b) => a.diff - b.diff || Math.abs(a.days) - Math.abs(b.days)).slice(0, 20);
+  openSheet(`<h2>Which charge is this order?</h2><p class="muted" style="margin:-6px 0 12px">${esc(amzLabel(sh))}: ${money(sh.total)}, shipped ${esc(short(sh.ship))}. Closest amounts first.</p>
+    ${cs.length ? `<div class="list">${cs.map(x => `<div class="tx" style="cursor:default"><span class="mid"><span class="d" style="display:block">${esc(x.c.ref.desc)}</span><span class="c">${esc(short(x.c.date))}${x.c.kind === "rv" ? " • In Review" : ""}${x.diff < 0.015 ? " • exact amount" : ""}</span></span><span style="text-align:right"><span class="a num" style="display:block">${money(x.c.amt)}</span><button class="btn sm" style="margin-top:6px" data-act="amz-link" data-k="${esc(x.c.kind)}|${esc(x.c.p || "")}|${esc(x.c.ref.id)}" data-key="${esc(key)}">Link</button></span></div>`).join("")}</div>` : `<p class="muted">No unlinked Amazon charges within 3 weeks of this order.</p>`}`);
+}
+
+/* ---------- spending calendar ---------- */
+function spendCalendar(m, tx){
+  const [y, mo] = m.split("-").map(Number), first = new Date(y, mo - 1, 1), days = new Date(y, mo, 0).getDate();
+  const per = {}; tx.forEach(t => { if (["personal","gas","debt"].includes(t.fund)) per[t.date] = (per[t.date] || 0) + (+t.amount || 0); });
+  const max = Math.max(1, ...Object.values(per).filter(v => v > 0)), sel = S.mday;
+  const cells = []; for (let i = 0; i < first.getDay(); i++) cells.push(`<span></span>`);
+  for (let d = 1; d <= days; d++){
+    const key = `${m}-${pad(d)}`, v = per[key] || 0, a = v > 0 ? 0.15 + 0.85 * Math.min(1, v / max) : 0;
+    cells.push(`<button class="cal-d ${sel === key ? "on" : ""}" data-act="mday" data-d="${key}" style="${v > 0 ? `background:rgba(255,214,0,${a.toFixed(2)});color:#161616` : ""}" aria-label="${esc(longDay(key))}: ${money(v)}" title="${money(v)}"><b>${d}</b>${v > 0 ? `<i>${money0(v)}</i>` : ""}</button>`);
+  }
+  return `<div class="panel"><h3 style="margin-bottom:8px">Spending calendar</h3><div class="cal">${["S","M","T","W","T","F","S"].map(x => `<span class="cal-h">${x}</span>`).join("")}${cells.join("")}</div>
+    <p class="small muted" style="margin:8px 0 0">Darker days had more spending (Personal, Gas and Debt). Tap a day to see its charges${sel ? ` • <button class="linkish small" data-act="mday" data-d="" style="text-decoration:underline">show all days</button>` : ""}.</p></div>`;
+}
+
+/* ---------- backup check ---------- */
+async function verifyDriveBackup(){
+  if (!FB.user){ toast("Sign in with Google first."); return; }
+  S.bcheck = {busy: true}; render();
+  try{
+    await getDriveToken();
+    const API = "https://www.googleapis.com/drive/v3/files";
+    const q = encodeURIComponent("name='Payday backups' and mimeType='application/vnd.google-apps.folder' and trashed=false");
+    const folder = ((await driveFetch(`${API}?q=${q}&fields=files(id)`)).files || [])[0];
+    if (!folder){ S.bcheck = {ok: false, msg: "No “Payday backups” folder in your Drive yet. Tap Back up to Drive now."}; render(); return; }
+    const q2 = encodeURIComponent(`'${folder.id}' in parents and trashed=false`);
+    const files = ((await driveFetch(`${API}?q=${q2}&fields=files(id,name,size,modifiedTime)&orderBy=modifiedTime desc&pageSize=10`)).files || []).filter(f => /^payday-backup-/.test(f.name));
+    if (!files.length){ S.bcheck = {ok: false, msg: "The backups folder is empty. Tap Back up to Drive now."}; render(); return; }
+    const f = files[0];
+    const r = await fetch(`${API}/${f.id}?alt=media`, {headers: {Authorization: "Bearer " + driveTok.token}});
+    const data = JSON.parse(await r.text());
+    if (!data || data.app !== "payday" || !data.docs) throw new Error("bad");
+    const ps = Object.keys(data.docs).filter(k => k.startsWith("p-")), tx = ps.reduce((a, k) => a + ((data.docs[k].txns || []).length), 0);
+    const age = Math.round((Date.now() - new Date(f.modifiedTime).getTime()) / 864e5);
+    S.bcheck = {ok: age <= 3, at: Date.now(), msg: `Newest backup (${esc(f.name.replace(/^payday-backup-|\.json$/g, ""))}) opened fine: ${ps.length} paychecks, ${tx} transactions.${age > 3 ? ` But it’s ${age} days old, so daily backups may have stopped. Tap Back up to Drive now.` : ""} ${files.length >= 10 ? "10+" : files.length} backups in the folder.`};
+    lsSet("payday-bcheck", JSON.stringify({at: Date.now(), ok: S.bcheck.ok}));
+  }catch(e){
+    S.bcheck = {ok: false, msg: e && e.code === "auth/popup-closed-by-user" ? "Check cancelled." : "Couldn’t open the newest backup. It may be damaged. Tap Back up to Drive now, then check again."};
+  }
+  render();
+}
+function backupWarning(){
+  if (!FB.user || !driveOn()) return null;
+  const last = lsGet("payday-drive-last"); if (!last) return "No Google Drive backup yet.";
+  const age = Math.round((toD(todayIso()) - toD(last)) / 864e5);
+  return age > 7 ? `Your last Google Drive backup was ${age} days ago.` : null;
+}
+
+/* ---------- download all receipts ---------- */
+function receiptsSheet(){
+  const list = periodList(), cur = list[S.pIdx === null || S.pIdx >= list.length ? list.length - 1 : S.pIdx];
+  const count = (from, to) => list.reduce((a, p) => a + (S.periods[p].txns || []).filter(t => t.rcpt && t.date >= from && t.date <= to).length, 0);
+  const m = todayIso().slice(0, 7), y = todayIso().slice(0, 4);
+  const opts = [["pay", `The ${short(cur)} paycheck`, cur, periodEnd(cur)], ["month", `This month (${monthName(m)})`, m + "-01", m + "-31"], ["year", `This year (${y})`, y + "-01-01", y + "-12-31"], ["all", "Everything", "0000", "9999"]];
+  openSheet(`<h2>Download receipts</h2><p class="muted" style="margin:-6px 0 12px">One zip of your receipt photos, each named with the date, place and amount.</p>
+    <div class="list">${opts.map(([k, l, f, t]) => { const n = count(f, t); return `<div class="row" style="justify-content:space-between;padding:10px 14px;border-top:1px solid var(--line)"><span>${esc(l)} <span class="small muted">(${n})</span></span><button class="btn sm" data-act="rcpt-zip" data-f="${f}" data-t="${t}" data-l="${esc(k)}" ${n ? "" : "disabled"}>Download</button></div>`; }).join("")}</div>`);
+}
+async function downloadReceipts(from, to, label){
+  if (!store.cloud){ toast("Turn on sync in Settings to use receipt photos."); return; }
+  const rows = []; periodList().forEach(p => (S.periods[p].txns || []).forEach(t => { if (t.rcpt && t.date >= from && t.date <= to) rows.push(t); }));
+  if (!rows.length) return;
+  toast(`Getting ${rows.length} photo${rows.length===1?"":"s"}…`);
+  const zip = new JSZip(), used = {}; let got = 0;
+  for (const t of rows){
+    try{
+      const d = await receiptRef(t.id).get(); if (!d.exists) continue;
+      const b64 = String(d.data().data).split(",")[1];
+      let name = `${t.date} ${String(t.desc || "Charge").replace(/[\\/:*?"<>|]+/g, "").slice(0, 40)} $${r2(Math.abs(+t.amount)).toFixed(2)}`;
+      if (used[name]) name += ` (${++used[name]})`; else used[name] = 1;
+      zip.file(name + ".jpg", b64, {base64: true}); got++;
+    }catch(e){}
+  }
+  if (!got){ toast("Couldn’t get the photos. Check your connection."); return; }
+  saveBlob(`Payday receipts ${label === "pay" ? from : label === "month" ? from.slice(0, 7) : label === "year" ? from.slice(0, 4) : "all"}.zip`, await zip.generateAsync({type: "blob"}));
+  closeSheet(); toast(`${got} receipt${got===1?"":"s"} saved to your Downloads.`);
 }
 
 /* ---------- savings goals ---------- */
@@ -2572,6 +2687,9 @@ function merchantSheet(desc, orig){
     <div class="stats" style="margin:4px 0 12px"><div class="stat"><div class="v num">${money0(yr)}</div><div class="k">This year</div></div><div class="stat"><div class="v num">${rows.length}</div><div class="k">Charges</div></div><div class="stat"><div class="v num">${money0(rows.length ? all / Object.keys(byP).length : 0)}</div><div class="k">Per paycheck, avg</div></div></div>
     ${pend ? `<p class="small muted" style="margin:0 0 8px">Plus ${pend} waiting in Review.</p>` : ""}
     ${Object.keys(byP).length ? `<h3 style="margin:6px 0">By paycheck</h3><div class="list">${Object.keys(byP).sort().reverse().map(p => `<div class="tx" style="cursor:default"><span class="mid">${esc(short(p))} to ${esc(short(periodEnd(p)))}</span><span class="a num">${money(byP[p])}</span></div>`).join("")}</div>` : ""}
+    <h3 style="margin:14px 0 6px">Note on this place</h3>
+    <textarea class="input" id="mnote" data-m="${esc(mo)}" placeholder="e.g. policy number, renewal month, where returns go" style="min-height:64px;font-family:var(--body);font-size:15px">${esc((S.settings.merchantNotes || {})[mo] || "")}</textarea>
+    <div class="row" style="justify-content:flex-end;margin-top:6px"><button class="btn ghost sm" data-act="mnote-save">Save note</button></div>
     <h3 style="margin:14px 0 6px">Every charge</h3>
     ${rows.length ? `<div class="list">${rows.slice(0, 100).map(txRow).join("")}</div>` : `<p class="muted">None confirmed yet.</p>`}
     <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn ghost" data-act="close">Close</button></div>`);
@@ -3225,8 +3343,8 @@ document.addEventListener("click", async e => {
   if (pf){ pf.parentElement.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b === pf)); return; }
   const el = e.target.closest("[data-act]"); if (!el) return;
   const a = el.dataset.act, id = el.dataset.id;
-  if (a === "prev"){ S.sel = null; S.pIdx--; render(); }
-  else if (a === "next"){ S.sel = null; S.pIdx++; render(); }
+  if (a === "prev"){ S.sel = null; S.pf = {}; S.pIdx--; render(); }
+  else if (a === "next"){ S.sel = null; S.pf = {}; S.pIdx++; render(); }
   else if (a === "close") closeSheet();
   else if (a === "new-period") periodSheet(false);
   else if (a === "edit-pay") periodSheet(true);
@@ -3268,6 +3386,7 @@ document.addEventListener("click", async e => {
     Object.assign(t, {amount: amt, desc: desc || "Untitled", date, fund, details}); if (!details) delete t.details;
     if (cat) t.cat = cat; else delete t.cat;
     { const tg = parseTags($("#t-tags") ? $("#t-tags").value : ""); if (tg.length) t.tags = tg; else delete t.tags; }
+    if ($("#t-oneoff")){ if ($("#t-oneoff").checked) t.oneoff = true; else delete t.oneoff; }
     if ($("#t-star")){ if ($("#t-star").checked || $("#t-starnote").value.trim()) t.star = {note: $("#t-starnote").value.trim(), at: (t.star && t.star.at) || Date.now()}; else delete t.star; }
     if (before && before.t.date !== date) delete t.pinP;
     const p = t.pinP && S.periods[t.pinP] ? t.pinP : periodFor(date); (S.periods[p].txns = S.periods[p].txns || []).push(t); touched.add(p);
@@ -3328,6 +3447,15 @@ document.addEventListener("click", async e => {
   else if (a === "range"){ S.range = el.dataset.r; render(); }
   else if (a === "save-moved") movedSheet();
   else if (a === "goals-edit") goalsSheet();
+  else if (a === "pf"){ S.pf = {...(S.pf || {})}; const k = el.dataset.k, v = el.dataset.v; if (k === "fund") S.pf.fund = v; else S.pf[k] = S.pf[k] ? "" : v; render(); }
+  else if (a === "pf-clear"){ S.pf = {}; render(); }
+  else if (a === "mnote-save"){ const box = $("#mnote"); S.settings.merchantNotes = {...(S.settings.merchantNotes || {})}; const v = box.value.trim(); if (v) S.settings.merchantNotes[box.dataset.m] = v; else delete S.settings.merchantNotes[box.dataset.m]; store.save("settings", S.settings); toast(v ? "Note saved." : "Note removed."); }
+  else if (a === "amz-pickcharge") amzPickChargeSheet(el.dataset.key);
+  else if (a === "mday"){ S.mday = el.dataset.d || null; render(); }
+  else if (a === "drive-check") verifyDriveBackup();
+  else if (a === "open-settings-sync"){ S.setOpen = new Set([...(S.setOpen || []), "Sync and Google Drive backup"]); go("settings"); }
+  else if (a === "rcpt-zip-open") receiptsSheet();
+  else if (a === "rcpt-zip") downloadReceipts(el.dataset.f, el.dataset.t, el.dataset.l);
   else if (a === "jump") jumpSheet();
   else if (a === "jump-go") jumpGo(+el.dataset.k);
   else if (a === "sub-cancel"){ S.settings.subCanceled = {...(S.settings.subCanceled || {}), [el.dataset.n]: todayIso()}; store.save("settings", S.settings); render(); toast(`Marked ${el.dataset.n} canceled. Payday will warn you if it charges again.`); }
@@ -3529,6 +3657,8 @@ document.addEventListener("input", e => {
   if (e.target.id === "t-desc") fillFromMerchant();
   if (e.target.id === "rc-month" && e.target.value){ const m = e.target.value, d = toD(m + "-01"); d.setMonth(d.getMonth() + 1); d.setDate(0); $("#rc-from").value = m + "-01"; $("#rc-to").value = iso(d); } if (e.target.id === "gh-repo" || e.target.id === "gh-token") ghRead(); if (e.target.id === "q"){ S.q = e.target.value; $("#qres").innerHTML = searchResults(); } });
 document.addEventListener("change", e => {
+  if (e.target.dataset && e.target.dataset.act === "pf-cat"){ S.pf = {...(S.pf || {}), cat: e.target.value}; render(); return; }
+  if (e.target.dataset && e.target.dataset.act === "pf-tag"){ S.pf = {...(S.pf || {}), tag: e.target.value}; render(); return; }
   if (e.target.id === "rc-file" && e.target.files.length){ reconFile(e.target.files[0]); e.target.value = ""; return; }
   if (e.target.id === "rcptIn" && e.target.files.length){ attachReceipt(e.target.dataset.id, e.target.files[0]); e.target.value = ""; return; }
   if (e.target.dataset && e.target.dataset.act === "ct-cat"){ S.ctCat = e.target.value; render(); return; }
