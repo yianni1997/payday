@@ -346,8 +346,9 @@ const SOURCES = {
 };
 /* ---------- version ---------- */
 // Bump APP_VERSION (and the cache name in sw.js to match) with every update, and add a line to CHANGES.
-const APP_VERSION = 40, APP_DATE = "2026-11-05";
+const APP_VERSION = 41, APP_DATE = "2026-11-06";
 const CHANGES = [
+  [41, "2026-11-06", "Pending charges now show first in What the pull found."],
   [40, "2026-11-05", "Swipe in Review, why-this-guess, rename all like this, New badges, More charts (paycheck history, extra income sources, savings over time, days of the week, new places, biggest, by account, charge size), goal milestones, restore one paycheck, export search results, storage meter, home-screen shortcuts, customize the Paycheck screen and bottom bar, Help."],
   [39, "2026-11-05", "Combined: filter a paycheck’s list, one-offs left out of averages, notes on a place, link from the Amazon orders list, spending calendar, backup check, download all receipts."],
   [38, "2026-11-03", "Match a statement can read a CSV or PDF and check it line by line, explains empty date ranges, All accounts option, Close out button on the Paycheck screen."],
@@ -1477,12 +1478,12 @@ async function plaidPull(){
   }catch(e){ plaidSet("", e.message); }
 }
 const PULL_KINDS = [
+  ["pending", "Pending, not posted yet", "var(--income)"],
   ["review", "Sent to Review", "var(--savings)"],
   ["dup", "Hidden as duplicates", "var(--gas)"],
   ["seen", "Already imported", "var(--muted)"],
   ["paid", "Card payments and PayPal reloads left out", "var(--muted)"],
   ["outside", "Outside this paycheck", "var(--muted)"],
-  ["pending", "Pending, not posted yet", "var(--muted)"],
   ["off", "From accounts set to “Don’t pull”", "var(--muted)"]
 ];
 function pullSheet(){
