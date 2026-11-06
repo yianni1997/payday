@@ -41,5 +41,43 @@
     }
    ]
   }
- }
+ },
+ "shortcuts": [
+  {
+   "name": "Review",
+   "short_name": "Review",
+   "url": "./?go=review",
+   "icons": [
+    {
+     "src": "icon-192.png",
+     "sizes": "192x192",
+     "type": "image/png"
+    }
+   ]
+  },
+  {
+   "name": "Add a charge",
+   "short_name": "Add",
+   "url": "./?go=add",
+   "icons": [
+    {
+     "src": "icon-192.png",
+     "sizes": "192x192",
+     "type": "image/png"
+    }
+   ]
+  },
+  {
+   "name": "Pull from bank",
+   "short_name": "Pull",
+   "url": "./?go=pull",
+   "icons": [
+    {
+     "src": "icon-192.png",
+     "sizes": "192x192",
+     "type": "image/png"
+    }
+   ]
+  }
+ ]
 }
