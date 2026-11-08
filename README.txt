@@ -89,3 +89,7 @@ IF SOMETHING GOES WRONG
 
 CONNECTING LIFEBUD (optional, version 42 and later)
 Payday saves a small summary (numbers only) in your Firebase after you use it. In Payday: Settings > Sync > LifeBud > Copy LifeBud code, then paste that code in LifeBud under Settings > Payday. The code lets LifeBud read your Payday data, so keep it private.
+
+BUDGETS AND BILLS (version 43 and later)
+Settings > Tools > Budgets: a limit per paycheck for any category, with a warning at 80% (you can change it) and a message when Personal drops below an amount you choose.
+Settings > Tools > Bills: add bills, or tap "Track as a bill" on a repeating charge. A bill is marked paid by itself when its charge shows up (once you've confirmed it in Review).

@@ -346,8 +346,9 @@ const SOURCES = {
 };
 /* ---------- version ---------- */
 // Bump APP_VERSION (and the cache name in sw.js to match) with every update, and add a line to CHANGES.
-const APP_VERSION = 42, APP_DATE = "2026-11-08";
+const APP_VERSION = 43, APP_DATE = "2026-11-08";
 const CHANGES = [
+  [43, "2026-11-08", "Budgets per paycheck with warnings, a low-Personal alert, and Bills that mark themselves paid when the charge shows up (with suggestions from repeating charges). All of it shows in LifeBud too."],
   [42, "2026-11-08", "LifeBud link: Payday saves a numbers-only summary (paycheck buckets, goals, Review count, subscriptions) that LifeBud can show. Settings > Sync > LifeBud."],
   [41, "2026-11-06", "Pending charges now show first in What the pull found."],
   [40, "2026-11-05", "Swipe in Review, why-this-guess, rename all like this, New badges, More charts (paycheck history, extra income sources, savings over time, days of the week, new places, biggest, by account, charge size), goal milestones, restore one paycheck, export search results, storage meter, home-screen shortcuts, customize the Paycheck screen and bottom bar, Help."],
@@ -601,6 +602,8 @@ function render(){
   else if (S.view === "merge") m.innerHTML = viewMerge();
   else if (S.view === "cattime") m.innerHTML = viewCatTime();
   else if (S.view === "subs") m.innerHTML = viewSubs();
+  else if (S.view === "budgets") m.innerHTML = viewBudgets();
+  else if (S.view === "bills") m.innerHTML = viewBills();
   else if (S.view === "starred") m.innerHTML = viewStarred();
   else if (S.view === "cats") m.innerHTML = viewCats();
   else if (S.view === "merges") m.innerHTML = viewMerges();
@@ -973,7 +976,7 @@ function viewHome(){
         ${fundRow("Debt", "var(--debt)", money(c.debtSpent) + "<small>paid</small>", `Up to ${money(c.debtBudget)} if needed`, c.debtBudget ? c.debtSpent/c.debtBudget : 0)}
         ${fundRow("Extra income", "var(--income)", money(c.extra), c.extra ? `${Math.round(S.settings.extraSavingsPct*100)}% goes to savings` : "Side jobs, sales, gifts", null)}
       </div>
-      ${goalsCard()}
+      ${homeChecks()}${goalsCard()}${budgetsCard()}${billsCard()}
     </div>
     <div class="col-right">
       ${allTx.length > 4 && !homeHidden("filters") ? payFilterBar(allTx) : ""}
@@ -1257,7 +1260,7 @@ function viewSettings(){
     <p class="small muted" style="margin:12px 0 0">A backup is one file. Keep a copy in Google Drive or email it to yourself. To move your data to another phone or computer, back up here and restore it there.</p>
   </div>
   <div class="panel"><h2 style="margin-bottom:6px">Tools</h2>
-    <div class="row"><button class="btn ghost" data-act="open-rules">Your rules (${ruleCount()})</button><button class="btn ghost" data-act="open-cats">Your categories</button><button class="btn ghost" data-act="open-tags">Tags</button><button class="btn ghost" data-act="open-merge">Merge merchant names</button><button class="btn ghost" data-act="recon-open">Match a statement</button><button class="btn ghost" data-act="open-health">Health check${(() => { const n = healthIssues().length; return n ? ` (${n})` : ""; })()}</button><button class="btn ghost" data-act="open-history">Change history</button><button class="btn ghost" data-act="open-merges">Check merges</button><button class="btn ghost" data-act="xlsx-open">Export like my spreadsheet (.xlsx)</button><button class="btn ghost" data-act="rcpt-zip-open">Download receipts</button><button class="btn ghost" data-act="export">Export to spreadsheet (CSV)</button>${nRules?'<button class="btn ghost" data-act="clear-rules">Forget learned merchants</button>':""}</div>
+    <div class="row"><button class="btn ghost" data-act="open-rules">Your rules (${ruleCount()})</button><button class="btn ghost" data-act="open-budgets">Budgets</button><button class="btn ghost" data-act="open-bills">Bills</button><button class="btn ghost" data-act="open-cats">Your categories</button><button class="btn ghost" data-act="open-tags">Tags</button><button class="btn ghost" data-act="open-merge">Merge merchant names</button><button class="btn ghost" data-act="recon-open">Match a statement</button><button class="btn ghost" data-act="open-health">Health check${(() => { const n = healthIssues().length; return n ? ` (${n})` : ""; })()}</button><button class="btn ghost" data-act="open-history">Change history</button><button class="btn ghost" data-act="open-merges">Check merges</button><button class="btn ghost" data-act="xlsx-open">Export like my spreadsheet (.xlsx)</button><button class="btn ghost" data-act="rcpt-zip-open">Download receipts</button><button class="btn ghost" data-act="export">Export to spreadsheet (CSV)</button>${nRules?'<button class="btn ghost" data-act="clear-rules">Forget learned merchants</button>':""}</div>
   </div>
   <div class="panel"><h2 style="margin-bottom:6px">Appearance</h2>
     <div class="small muted" style="margin:0 0 6px">Colors</div>
@@ -1673,6 +1676,7 @@ function viewCats(){
 }
 function saveCats(){ store.save("settings", S.settings); }
 function renameCategoryEverywhere(oldName, newName){
+  const bud = S.settings.catBudgets; if (bud && bud[oldName] !== undefined){ if (newName) bud[newName] = bud[oldName]; delete bud[oldName]; store.save("settings", S.settings); }
   const touched = new Set();
   periodList().forEach(p => (S.periods[p].txns || []).forEach(t => { if (t.cat === oldName){ t.cat = newName; touched.add(p); } }));
   S.inbox.items.forEach(i => { if (i.cat === oldName) i.cat = newName; });
@@ -2212,7 +2216,7 @@ function viewSubs(){
   ${subs.length ? `<div class="list">${subs.map(x => `<div style="padding:12px 14px;border-top:1px solid var(--line)"><div class="row" style="justify-content:space-between;flex-wrap:nowrap"><button class="linkish" data-act="merchant" data-q="${esc(x.name)}" data-o="">${esc(x.name)}</button><b class="num">${money(x.price)}</b></div>
     <div class="small muted">${esc(x.freq)} • last charged ${esc(short(x.last))} • ${money(x.perYear)} a year • seen ${x.n} times</div>
     ${(() => { const pc = priceChange(x.name); return pc ? `<div class="small" style="margin-top:4px;color:${pc.to > pc.from ? "var(--neg)" : "var(--pos)"}">Price ${pc.to > pc.from ? "went up" : "went down"} from ${money(pc.from)} to ${money(pc.to)} in ${esc(MON[+pc.date.slice(5,7)-1])}: ${pc.to > pc.from ? "+" : "−"}${money(Math.abs(pc.to - pc.from) * (x.perYear / x.price))} a year.</div>` : ""; })()}
-    <div class="row" style="margin-top:6px"><button class="btn ghost sm" style="min-height:30px;padding:3px 10px" data-act="sub-cancel" data-n="${esc(x.name)}">I canceled it</button><button class="btn ghost sm" style="min-height:30px;padding:3px 10px" data-act="sub-ignore" data-n="${esc(x.name)}">Not a subscription</button></div></div>`).join("")}</div>` : `<div class="list"><div class="empty">No repeating charges found yet.</div></div>`}
+    <div class="row" style="margin-top:6px"><button class="btn ghost sm" style="min-height:30px;padding:3px 10px" data-act="sub-cancel" data-n="${esc(x.name)}">I canceled it</button><button class="btn ghost sm" style="min-height:30px;padding:3px 10px" data-act="sub-ignore" data-n="${esc(x.name)}">Not a subscription</button><button class="btn ghost sm" style="min-height:30px;padding:3px 10px" data-act="bill-track" data-n="${esc(x.name)}">Track as a bill</button></div></div>`).join("")}</div>` : `<div class="list"><div class="empty">No repeating charges found yet.</div></div>`}
   ${Object.keys(S.settings.subCanceled || {}).length ? `<h3 style="margin:18px 0 6px">Canceled</h3><p class="small muted" style="margin:0 0 8px">If one of these charges you again, Review flags it in red.</p><div class="list">${Object.entries(S.settings.subCanceled).map(([n, d]) => `<div class="row" style="justify-content:space-between;flex-wrap:nowrap;padding:10px 14px;border-top:1px solid var(--line)"><span><b>${esc(n)}</b><br><span class="small muted">Canceled ${esc(short(d))}</span></span><button class="btn ghost sm" data-act="sub-uncancel" data-n="${esc(n)}">Undo</button></div>`).join("")}</div>` : ""}`;
 }
 
@@ -2309,7 +2313,7 @@ const JUMPS = [
   ["Search all charges", "find", () => { S.qMode = "all"; go("search"); }], ["Amazon charges and orders", "amazon orders label", () => { S.qMode = "amazon"; go("search"); }],
   ["Month view", "calendar month", () => { S.month = null; go("month"); }], ["Year in review", "annual summary", () => go("year")],
   ["Compare paychecks", "side by side", () => go("compare")], ["Category over time", "chart category", () => go("cattime")],
-  ["Subscriptions", "recurring repeating canceled", () => go("subs")], ["Starred charges", "follow up star", () => go("starred")],
+  ["Subscriptions", "recurring repeating canceled", () => go("subs")], ["Budgets", "limit category alert over spending", () => go("budgets")], ["Bills", "due paid rent recurring autopay", () => go("bills")], ["Starred charges", "follow up star", () => go("starred")],
   ["Tags", "hashtag", () => go("tags")], ["Your categories", "category rename", () => go("cats")], ["Your rules", "always rename split direction learned", () => go("rules")],
   ["Merge merchant names", "merge combine names", () => { S.mpick = []; go("merge"); }], ["Match a statement", "reconcile statement total", () => reconSheet()],
   ["Health check", "problems issues duplicates", () => go("health")], ["Change history", "undo log", () => go("history")],
@@ -2803,6 +2807,133 @@ function goalsSheet(){
       <button type="button" class="btn ghost sm" data-gadd>Add another goal</button></div>
     <div class="row" style="justify-content:flex-end;margin-top:6px"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="goals-save">Save</button></div>`);
 }
+/* ---------- budgets, spending alerts, bills ---------- */
+function homeChecks(){ if (billsSync()) store.save("settings", S.settings); checkBudgetAlerts(); return ""; }
+const curPeriod = () => { const l = periodList(); return l.length ? l[l.length - 1] : null; };
+// Budgets are per paycheck, per category (keyed by the built-in or custom name, so renaming a category keeps its limit). They count Personal spending, net of refunds.
+function budgetSpent(p){
+  const spent = {};
+  ((S.periods[p] || {}).txns || []).forEach(t => { if (t.fund === "personal"){ const k = rawCategory(t); spent[k] = r2((spent[k] || 0) + (+t.amount || 0)); } });
+  return spent;
+}
+function budgetStatus(p){
+  p = p || curPeriod(); if (!p || !S.periods[p]) return [];
+  const lim = S.settings.catBudgets || {}, warn = +S.settings.budgetWarnPct || 80, spent = budgetSpent(p);
+  return Object.entries(lim).filter(([k, v]) => +v > 0).map(([name, v]) => {
+    const limit = +v, s = spent[name] || 0, pct = s / limit * 100;
+    return {name, limit, spent: s, left: r2(limit - s), pct, level: pct >= 100 ? "over" : pct >= warn ? "warn" : "ok"};
+  }).sort((a, b) => b.pct - a.pct);
+}
+function budgetTypical(name){
+  const l = periodList().slice(0, -1).slice(-4); if (!l.length) return 0;
+  return r2(l.reduce((a, p) => a + (budgetSpent(p)[name] || 0), 0) / l.length);
+}
+// Tells you once when a category reaches its warning point or its limit, and when Personal drops below the amount you chose.
+function checkBudgetAlerts(){
+  const p = curPeriod(); if (!p || !S.ready) return;
+  const st = S.settings, rank = {ok: 0, warn: 1, over: 2};
+  const seen = st.budgetSeen && st.budgetSeen.p === p ? st.budgetSeen : {p, lv: {}, low: false};
+  let changed = st.budgetSeen !== seen, msg = null;
+  budgetStatus(p).forEach(b => {
+    const was = rank[seen.lv[b.name]] || 0, now = rank[b.level];
+    if (now > was){ seen.lv[b.name] = b.level; changed = true; msg = b.level === "over" ? `${catName(b.name)} is over its ${money0(b.limit)} budget.` : `${catName(b.name)} is at ${Math.round(b.pct)}% of its budget.`; }
+    else if (now < was){ seen.lv[b.name] = b.level; changed = true; }
+  });
+  const low = +st.lowAlert || 0, left = calc(p).personalLeft;
+  if (low > 0 && left < low && !seen.low){ seen.low = true; changed = true; msg = `Personal is down to ${money0(left)}.`; }
+  else if (seen.low && (low <= 0 || left >= low)){ seen.low = false; changed = true; }
+  if (changed){ st.budgetSeen = seen; store.save("settings", st); if (msg) setTimeout(() => toast(msg), 300); }
+}
+function budgetBar(b){
+  const col = b.level === "over" ? "var(--neg)" : b.level === "warn" ? "#f59e0b" : "";
+  return `<div class="bar"><i style="width:${Math.min(100, b.pct).toFixed(0)}%;${col ? "background:" + col : ""}"></i></div>`;
+}
+function budgetsCard(){
+  const bs = budgetStatus(); if (!bs.length) return "";
+  const hot = bs.filter(b => b.level !== "ok"), show = (hot.length ? hot : bs).slice(0, 3);
+  return `<div class="goals"><div class="row" style="justify-content:space-between;margin-bottom:4px"><b>Budgets this paycheck</b><button class="btn ghost sm" data-act="open-budgets" style="min-height:32px;padding:4px 12px">Edit</button></div>
+    ${show.map(b => `<div class="goal"><div class="row" style="justify-content:space-between;flex-wrap:nowrap"><b style="min-width:0;overflow-wrap:anywhere">${esc(catName(b.name))}</b><span class="num small"><b>${money0(b.spent)}</b> of ${money0(b.limit)}</span></div>${budgetBar(b)}
+      <div class="small muted">${b.level === "over" ? `<span style="color:var(--neg)">${money0(-b.left)} over</span>` : `${money0(b.left)} left`}</div></div>`).join("")}
+    ${hot.length ? "" : `<div class="small muted">All ${bs.length} on track.</div>`}</div>`;
+}
+function viewBudgets(){
+  const p = curPeriod(), st = budgetStatus(p), by = {}; st.forEach(b => { by[b.name] = b; });
+  const cats = allCategories().filter(n => n !== "Gas"), ordered = [...cats.filter(c => by[c]), ...cats.filter(c => !by[c])];
+  const warn = +S.settings.budgetWarnPct || 80, low = +S.settings.lowAlert || "";
+  return `<div class="topbar"><h1 style="display:flex;align-items:center;gap:12px"><button class="iconbtn" data-tab="home" aria-label="Back to Paycheck">${ICONS.left}</button>Budgets</h1></div>
+  <p class="muted" style="margin:0 0 12px">A limit per paycheck for any kind of Personal spending. Payday tells you at ${warn}% and when you pass it. Leave a box empty for no limit. The grey number is what you usually spend.</p>
+  <div class="list" style="padding:0">${ordered.map(k => { const b = by[k], typ = budgetTypical(k);
+    return `<div style="padding:12px 14px;border-top:1px solid var(--line)"><div class="row" style="justify-content:space-between;flex-wrap:nowrap;gap:10px"><b>${esc(catName(k))}</b><input class="input num" data-bud="${esc(k)}" inputmode="decimal" value="${b ? b.limit : ""}" placeholder="${typ > 0 ? "usually " + Math.round(typ) : "$ limit"}" style="max-width:130px;min-height:40px" aria-label="Limit for ${esc(catName(k))}"></div>
+      ${b ? `${budgetBar(b)}<div class="small muted">${money0(b.spent)} spent, ${b.left >= 0 ? money0(b.left) + " left" : `<span style="color:var(--neg)">${money0(-b.left)} over</span>`}</div>` : ""}</div>`; }).join("")}</div>
+  <h3 style="margin:20px 0 6px">Alerts</h3>
+  <div class="list" style="padding:12px 14px">
+    <label class="field"><span>Warn me when a category reaches (%)</span><input class="input num" data-budset="budgetWarnPct" inputmode="numeric" value="${warn}"></label>
+    <label class="field" style="margin-bottom:0"><span>Tell me when Personal drops below ($)</span><input class="input num" data-budset="lowAlert" inputmode="decimal" value="${low}" placeholder="off"><small>You get a message once per paycheck. LifeBud shows these too.</small></label>
+  </div>`;
+}
+
+const BILL_FREQ = ["Monthly", "Every 2 weeks", "Weekly", "Every 3 months", "Yearly"];
+function billAdvance(date, freq){
+  const d = toD(date);
+  if (freq === "Monthly") d.setMonth(d.getMonth() + 1); else if (freq === "Every 2 weeks") d.setDate(d.getDate() + 14);
+  else if (freq === "Weekly") d.setDate(d.getDate() + 7); else if (freq === "Every 3 months") d.setMonth(d.getMonth() + 3); else d.setFullYear(d.getFullYear() + 1);
+  return iso(d);
+}
+function billMatches(b, t){
+  const m = String(b.match || b.name || "").trim().toLowerCase(), n = merchantOf(t).toLowerCase(); if (!m) return false;
+  if (n === m || (m.length >= 4 && n.includes(m)) || (n.length >= 4 && m.includes(n))) return true;
+  return norm(n) && norm(n) === norm(m);
+}
+function billAmountOk(b, t){ const a = +b.amount || 0; return !a || Math.abs((+t.amount || 0) - a) <= Math.max(1, a * 0.2); }
+// A bill is marked paid when a matching charge shows up near its due date. Charges count once they're confirmed in Review.
+function billsSync(){
+  const bs = S.settings.bills; if (!bs || !bs.length) return false;
+  const txs = []; periodList().forEach(p => (S.periods[p].txns || []).forEach(t => { if (+t.amount > 0 && t.fund !== "income" && t.fund !== "savings") txs.push(t); }));
+  let changed = false;
+  bs.forEach(b => {
+    for (let g = 0; g < 6; g++){
+      const from = addDays(b.next, -10), to = addDays(b.next, 20);
+      const hit = txs.filter(t => t.date >= from && t.date <= to && t.id !== b.lastTx && (!b.lastPaid || t.date > b.lastPaid) && billMatches(b, t) && billAmountOk(b, t))
+        .sort((x, y) => Math.abs(dayDiff(x.date, b.next)) - Math.abs(dayDiff(y.date, b.next)))[0];
+      if (!hit) break;
+      b.lastPaid = hit.date; b.lastTx = hit.id; b.amount = r2(+hit.amount); b.next = billAdvance(b.next, b.freq); b.auto = true; changed = true;
+    }
+  });
+  return changed;
+}
+function billStatus(b){ const d = dayDiff(b.next, todayIso()); return d < -2 ? "overdue" : d <= 7 ? "soon" : "later"; }
+function billSuggestions(){
+  const have = (S.settings.bills || []).map(b => String(b.match || b.name).toLowerCase()), ign = new Set(S.settings.billIgnore || []), canc = S.settings.subCanceled || {};
+  return findSubscriptions().filter(s => !canc[s.name] && !ign.has(s.name) && !have.some(h => h && (s.name.toLowerCase().includes(h) || h.includes(s.name.toLowerCase()))))
+    .map(s => ({name: s.name, amount: s.price, freq: s.freq, next: lbNextDue(s.last, s.freq)}));
+}
+function billsCard(){
+  const bs = (S.settings.bills || []).filter(b => billStatus(b) !== "later").sort((a, b) => a.next.localeCompare(b.next)); if (!bs.length) return "";
+  return `<div class="goals"><div class="row" style="justify-content:space-between;margin-bottom:4px"><b>Bills due soon</b><button class="btn ghost sm" data-act="open-bills" style="min-height:32px;padding:4px 12px">All bills</button></div>
+    ${bs.slice(0, 3).map(b => `<div class="row" style="justify-content:space-between;flex-wrap:nowrap;padding:4px 0"><span style="min-width:0;overflow-wrap:anywhere"><b>${esc(b.name)}</b> <span class="small ${billStatus(b) === "overdue" ? "" : "muted"}" ${billStatus(b) === "overdue" ? 'style="color:var(--neg)"' : ""}>${billStatus(b) === "overdue" ? "overdue, was due " : "due "}${esc(short(b.next))}</span></span><b class="num">${money0(b.amount)}</b></div>`).join("")}</div>`;
+}
+function viewBills(){
+  const bs = (S.settings.bills || []).slice().sort((a, b) => a.next.localeCompare(b.next)), sug = billSuggestions();
+  const pill = b => { const s = billStatus(b); return s === "overdue" ? `<span class="small" style="color:var(--neg)">Overdue, was due ${esc(short(b.next))}</span>` : s === "soon" ? `<span class="small" style="color:#f59e0b">Due ${esc(short(b.next))}</span>` : `<span class="small muted">Next ${esc(short(b.next))}</span>`; };
+  return `<div class="topbar"><h1 style="display:flex;align-items:center;gap:12px"><button class="iconbtn" data-tab="home" aria-label="Back to Paycheck">${ICONS.left}</button>Bills</h1><button class="btn sm" data-act="bill-add">Add a bill</button></div>
+  <p class="muted" style="margin:0 0 12px">A bill is marked paid by itself when its charge shows up near the due date (once you've confirmed it in Review). You can also tap Paid.</p>
+  ${bs.length ? `<div class="list">${bs.map(b => `<div style="padding:12px 14px;border-top:1px solid var(--line)"><div class="row" style="justify-content:space-between;flex-wrap:nowrap"><button class="linkish" data-act="bill-edit" data-id="${esc(b.id)}">${esc(b.name)}</button><b class="num">${money(b.amount)}</b></div>
+    <div class="small muted">${esc(b.freq)}${b.lastPaid ? ` · last paid ${esc(short(b.lastPaid))}${b.lastTx ? "" : " (marked by you)"}` : ""}</div><div>${pill(b)}</div>
+    <div class="row" style="margin-top:6px"><button class="btn ghost sm" style="min-height:30px;padding:3px 10px" data-act="bill-paid" data-id="${esc(b.id)}">Paid</button><button class="btn ghost sm" style="min-height:30px;padding:3px 10px" data-act="bill-edit" data-id="${esc(b.id)}">Edit</button></div></div>`).join("")}</div>` : `<div class="list"><div class="empty">No bills yet. Add one, or track a suggestion below.</div></div>`}
+  ${sug.length ? `<h3 style="margin:18px 0 6px">Looks like bills</h3><p class="small muted" style="margin:0 0 8px">Charges that repeat at a steady price. Tap to track one.</p><div class="list">${sug.map(s => `<div style="padding:12px 14px;border-top:1px solid var(--line)"><div class="row" style="justify-content:space-between;flex-wrap:nowrap"><b>${esc(s.name)}</b><b class="num">${money(s.amount)}</b></div><div class="small muted">${esc(s.freq)} · next about ${esc(short(s.next))}</div>
+    <div class="row" style="margin-top:6px"><button class="btn sm" style="min-height:30px;padding:3px 12px" data-act="bill-track" data-n="${esc(s.name)}">Track as a bill</button><button class="btn ghost sm" style="min-height:30px;padding:3px 10px" data-act="bill-ignore" data-n="${esc(s.name)}">Not a bill</button></div></div>`).join("")}</div>` : ""}`;
+}
+function billSheet(id, pre){
+  const b = id ? (S.settings.bills || []).find(x => x.id === id) : null, v = b || pre || {name: "", amount: "", freq: "Monthly", next: addDays(todayIso(), 7)};
+  openSheet(`<h2>${b ? "Edit bill" : "Add a bill"}</h2>
+    <label class="field"><span>Name</span><input class="input" id="b-name" value="${esc(v.name || "")}" placeholder="Rent, Verizon, Geico..."></label>
+    <label class="field"><span>Amount</span><input class="input num" id="b-amt" inputmode="decimal" value="${v.amount || ""}"></label>
+    <label class="field"><span>How often</span><select class="input" id="b-freq">${BILL_FREQ.map(f => `<option ${f === v.freq ? "selected" : ""}>${f}</option>`).join("")}</select></label>
+    <label class="field"><span>Next due</span><input class="input" type="date" id="b-next" value="${v.next || ""}"></label>
+    <label class="field"><span>Charge name to watch for</span><input class="input" id="b-match" value="${esc(v.match || v.name || "")}"><small>Payday marks the bill paid when a charge with this name (and about this amount) appears. Usually the same as the name.</small></label>
+    <div class="row" style="justify-content:space-between;margin-top:6px"><span>${b ? `<button class="btn ghost" data-act="bill-del" data-id="${esc(b.id)}">Delete</button>` : ""}</span><span class="row" style="gap:8px"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="bill-save" data-id="${b ? esc(b.id) : ""}">Save</button></span></div>`);
+}
+
 /* ---------- LifeBud link: a small summary other apps can read (numbers only, no merchant names) ---------- */
 const LB = {timer: null, last: "", day: ""};
 function lbNextDue(last, freq){
@@ -2842,11 +2973,14 @@ function lbSummary(){
     goals: gs.map(g => ({name: g.name, target: g.target, saved: g.saved, eta: g.eta ? iso(g.eta).slice(0, 7) : null})),
     milestones: recent,
     subs: {upcoming, changes, count: subs.length, yearly: r2(subs.reduce((a, s) => a + s.yearly, 0))},
+    budgets: budgetStatus(p).map(b => ({name: catName(b.name), limit: b.limit, spent: b.spent, left: b.left, level: b.level})),
+    bills: (S.settings.bills || []).slice().sort((a, b) => a.next.localeCompare(b.next)).slice(0, 15).map(b => ({name: b.name, amount: b.amount, next: b.next, status: billStatus(b), lastPaid: b.lastPaid || null})),
     topCats, daily, dailyFrom: from > list[0] ? from : list[0]
   };
 }
 async function lbPublish(force){
   if (!store.cloud || !FB.db || !S.ready) return;
+  try{ if (billsSync()) store.save("settings", S.settings); }catch(e){}
   let s; try{ s = lbSummary(); }catch(e){ return; }
   if (!s) return;
   const json = JSON.stringify(s), day = todayIso();
@@ -2864,7 +2998,7 @@ function lbCode(){
 }
 function lbGoFromUrl(){
   const m = /^#go=(\w+)/.exec(location.hash); if (!m) return;
-  const view = m[1], ok = ["home", "review", "accounts", "subs", "trends", "settings"];
+  const view = m[1], ok = ["home", "review", "accounts", "subs", "trends", "settings", "bills", "budgets"];
   history.replaceState(null, "", location.pathname);
   if (!ok.includes(view)) return;
   let tries = 0; const t = setInterval(() => { if (S.ready || ++tries > 40){ clearInterval(t); if (S.ready) go(view); } }, 250);
@@ -3964,6 +4098,22 @@ document.addEventListener("click", async e => {
     lsSet("payday-fb", JSON.stringify(cfg)); initFirebase(); render(); toast("Saved. Now sign in with Google.");
   }
   else if (a === "fb-signin") signIn();
+  else if (a === "open-budgets") go("budgets");
+  else if (a === "open-bills") go("bills");
+  else if (a === "bill-add") billSheet(null);
+  else if (a === "bill-edit") billSheet(el.dataset.id);
+  else if (a === "bill-track"){ const x = findSubscriptions().find(z => z.name === el.dataset.n); if (x){ billSheet(null, {name: x.name, amount: x.price, freq: x.freq, next: lbNextDue(x.last, x.freq), match: x.name}); } }
+  else if (a === "bill-ignore"){ S.settings.billIgnore = [...(S.settings.billIgnore || []), el.dataset.n]; store.save("settings", S.settings); render(); }
+  else if (a === "bill-paid"){ const b = (S.settings.bills || []).find(x => x.id === el.dataset.id); if (b){ b.lastPaid = todayIso(); b.lastTx = null; b.next = billAdvance(b.next, b.freq); store.save("settings", S.settings); render(); toast(`Marked paid. Next due ${short(b.next)}.`); } }
+  else if (a === "bill-del"){ S.settings.bills = (S.settings.bills || []).filter(x => x.id !== el.dataset.id); store.save("settings", S.settings); closeSheet(); render(); toast("Bill removed."); }
+  else if (a === "bill-save"){
+    const name = $("#b-name").value.trim(), amt = parseFloat($("#b-amt").value), next = $("#b-next").value;
+    if (!name){ toast("Give the bill a name."); return; } if (!(amt >= 0) || isNaN(amt)){ toast("Enter the amount."); return; } if (!next){ toast("Pick the next due date."); return; }
+    const rec = {name, amount: r2(amt), freq: $("#b-freq").value, next, match: $("#b-match").value.trim() || name};
+    const list = S.settings.bills = S.settings.bills || [], cur = el.dataset.id ? list.find(x => x.id === el.dataset.id) : null;
+    if (cur) Object.assign(cur, rec); else list.push({id: uid(), ...rec});
+    billsSync(); store.save("settings", S.settings); closeSheet(); render();
+  }
   else if (a === "lb-now"){ await lbPublish(true); toast("LifeBud summary updated."); }
   else if (a === "lb-code"){
     const code = lbCode();
@@ -4035,6 +4185,16 @@ document.addEventListener("change", e => {
   if (e.target.dataset && e.target.dataset.act === "cmp-b"){ S.cmpB = e.target.value; render(); return; }
   if (e.target.dataset && e.target.dataset.qf !== undefined){ S.qf = {...(S.qf || {}), [e.target.dataset.qf]: e.target.value.trim()}; S.qfOpen = true; render(); return; }
   if (e.target.dataset && e.target.dataset.act === "year-pick"){ S.year = e.target.value; render(); return; }
+  if (e.target.dataset && e.target.dataset.bud !== undefined){
+    const k = e.target.dataset.bud, v = parseFloat(e.target.value), bud = {...(S.settings.catBudgets || {})};
+    if (v > 0) bud[k] = r2(v); else delete bud[k];
+    S.settings.catBudgets = bud; store.save("settings", S.settings); render(); return;
+  }
+  if (e.target.dataset && e.target.dataset.budset !== undefined){
+    const k = e.target.dataset.budset, v = parseFloat(e.target.value);
+    if (k === "budgetWarnPct") S.settings.budgetWarnPct = v >= 10 && v <= 99 ? Math.round(v) : 80; else S.settings[k] = v > 0 ? r2(v) : 0;
+    store.save("settings", S.settings); render(); return;
+  }
   if (e.target.dataset && e.target.dataset.catI !== undefined){
     const i = +e.target.dataset.catI, c = (S.settings.cats || [])[i]; if (!c) return;
     if (e.target.dataset.catF === "name"){ const nn = e.target.value.trim(); if (!nn){ toast("A category needs a name."); return; } if (allCategories().includes(nn) && nn !== c.name){ toast("There’s already a category with that name."); return; } renameCategoryEverywhere(c.name, nn); c.name = nn; }
