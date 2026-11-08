@@ -85,3 +85,7 @@ IF SOMETHING GOES WRONG
   APIs & Services > OAuth consent screen. If it's in Testing, add your Gmail under Test users
   (or click Publish app).
 - Sign-in window doesn't appear: allow pop-ups for your Payday site in the browser.
+
+
+CONNECTING LIFEBUD (optional, version 42 and later)
+Payday saves a small summary (numbers only) in your Firebase after you use it. In Payday: Settings > Sync > LifeBud > Copy LifeBud code, then paste that code in LifeBud under Settings > Payday. The code lets LifeBud read your Payday data, so keep it private.

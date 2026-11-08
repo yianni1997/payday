@@ -346,8 +346,9 @@ const SOURCES = {
 };
 /* ---------- version ---------- */
 // Bump APP_VERSION (and the cache name in sw.js to match) with every update, and add a line to CHANGES.
-const APP_VERSION = 41, APP_DATE = "2026-11-06";
+const APP_VERSION = 42, APP_DATE = "2026-11-08";
 const CHANGES = [
+  [42, "2026-11-08", "LifeBud link: Payday saves a numbers-only summary (paycheck buckets, goals, Review count, subscriptions) that LifeBud can show. Settings > Sync > LifeBud."],
   [41, "2026-11-06", "Pending charges now show first in What the pull found."],
   [40, "2026-11-05", "Swipe in Review, why-this-guess, rename all like this, New badges, More charts (paycheck history, extra income sources, savings over time, days of the week, new places, biggest, by account, charge size), goal milestones, restore one paycheck, export search results, storage meter, home-screen shortcuts, customize the Paycheck screen and bottom bar, Help."],
   [39, "2026-11-05", "Combined: filter a paycheck’s list, one-offs left out of averages, notes on a place, link from the Amazon orders list, spending calendar, backup check, download all receipts."],
@@ -445,11 +446,13 @@ const store = {
   save(id, body){
     body._u = Date.now();
     const all = readLocal(); all[id] = cleanDoc(body); writeLocal(all);
+    lbSchedule();
     if (this.cloud) return this.cloud.ref.doc(id).set(cleanDoc(body)).catch(e => toast("Couldn’t sync a change (" + (e.code || "error") + "). It’s still saved on this device."));
     return Promise.resolve();
   },
   remove(id){
     const all = readLocal(); delete all[id]; writeLocal(all);
+    lbSchedule();
     if (this.cloud) return this.cloud.ref.doc(id).delete().catch(() => toast("Couldn’t sync that delete. Try again."));
     return Promise.resolve();
   }
@@ -1198,6 +1201,9 @@ function syncPanel(){
     ${(() => { const w = backupWarning(); return w ? `<div class="notice" style="color:var(--neg);margin:0 0 10px">⚠ ${esc(w)}</div>` : ""; })()}
     ${S.bcheck && !S.bcheck.busy ? `<div class="notice" style="margin:0 0 10px">${S.bcheck.ok ? "✅" : "⚠"} ${S.bcheck.msg}</div>` : ""}
     <div class="row">${driveOn() ? `<button class="btn sm" data-act="drive-now" ${driveBusy?"disabled":""}>${driveBusy ? '<span class="spinner"></span> Backing up' : "Back up to Drive now"}</button><button class="btn ghost sm" data-act="drive-check" ${S.bcheck && S.bcheck.busy ? "disabled" : ""}>${S.bcheck && S.bcheck.busy ? '<span class="spinner"></span> Checking' : "Check my backups"}</button><button class="btn ghost sm" data-act="drive-off">Turn off</button>` : `<button class="btn sm" data-act="drive-on">Turn on daily Drive backups</button>`}</div>
+    <h3 style="margin:18px 0 6px">LifeBud</h3>
+    <p class="muted" style="margin:0 0 10px">If you use LifeBud, it can show this paycheck, goals, Review count and upcoming subscriptions. Payday saves a small summary (numbers only, no store names) in your Firebase, and LifeBud reads it. Tap the first button, then paste the code into LifeBud under Settings > Payday. Treat the code like a password: it lets LifeBud read your Payday data.</p>
+    <div class="row"><button class="btn ghost sm" data-act="lb-code">Copy LifeBud code</button><button class="btn ghost sm" data-act="lb-now">Update summary now</button></div>
     <h3 style="margin:18px 0 6px">Undo a mistake</h3>
     <p class="muted" style="margin:0 0 8px">A copy is also saved in your Firebase project once a day (last 30 days). Go back to one if something gets deleted by accident.</p>
     ${snaps}</div>`;
@@ -2797,6 +2803,73 @@ function goalsSheet(){
       <button type="button" class="btn ghost sm" data-gadd>Add another goal</button></div>
     <div class="row" style="justify-content:flex-end;margin-top:6px"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="goals-save">Save</button></div>`);
 }
+/* ---------- LifeBud link: a small summary other apps can read (numbers only, no merchant names) ---------- */
+const LB = {timer: null, last: "", day: ""};
+function lbNextDue(last, freq){
+  const t = todayIso(); let d = toD(last);
+  const step = () => {
+    if (freq === "Monthly") d.setMonth(d.getMonth() + 1);
+    else if (freq === "Every 2 weeks") d.setDate(d.getDate() + 14);
+    else if (freq === "Weekly") d.setDate(d.getDate() + 7);
+    else if (freq === "Every 3 months") d.setMonth(d.getMonth() + 3);
+    else d.setFullYear(d.getFullYear() + 1);
+  };
+  for (let i = 0; i < 400; i++){ step(); if (iso(d) >= t) break; }
+  return iso(d);
+}
+function lbSummary(){
+  const list = periodList(); if (!list.length) return null;
+  const p = list[list.length - 1], c = calc(p), end = periodEnd(p), today = todayIso();
+  const led = savingsLedger(p), gs = goalProgress();
+  const ms = S.settings.goalMilestones || {}, cutoff = addDays(today, -7), recent = [];
+  gs.forEach(g => [25, 50, 75, 100].forEach(m => { const d = (ms[g.id] || {})[m]; if (d && d >= cutoff) recent.push({name: g.name, pct: m, date: d}); }));
+  const subs = findSubscriptions().map(s => ({name: s.name, price: s.price, freq: s.freq, next: lbNextDue(s.last, s.freq), yearly: s.perYear}));
+  const upcoming = subs.filter(s => s.next <= addDays(today, 30)).sort((a, b) => a.next.localeCompare(b.next)).slice(0, 12);
+  const changes = []; subs.forEach(s => { const pc = priceChange(s.name); if (pc && pc.date >= addDays(today, -60)) changes.push({name: s.name, from: pc.from, to: pc.to, date: pc.date}); });
+  const daily = {}, from = addDays(today, -35);
+  list.forEach(per => (S.periods[per].txns || []).forEach(t => { if ((t.fund === "personal" || t.fund === "gas" || t.fund === "debt") && +t.amount > 0 && t.date >= from && t.date <= today) daily[t.date] = r2((daily[t.date] || 0) + (+t.amount)); }));
+  const cats = {}; (S.periods[p].txns || []).forEach(t => { if (t.fund === "personal" && +t.amount > 0){ const k = category(t); cats[k] = r2((cats[k] || 0) + (+t.amount)); } });
+  const topCats = Object.entries(cats).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, amount]) => ({name, amount}));
+  const pend = pending();
+  return {
+    v: 1, app: "payday", version: APP_VERSION, url: location.origin + location.pathname,
+    period: {start: p, end, nextPayday: addDays(end, 1), pay: c.pay, extra: c.extra},
+    personal: {budget: c.personalBudget, spent: c.personalSpent, left: c.personalLeft, carry: c.carry, owedIn: c.owedIn, rolledIn: c.rolledIn},
+    gas: {budget: c.gasBudget, spent: c.gasSpent, left: c.gasLeft},
+    debt: {budget: c.debtBudget, spent: c.debtSpent, left: r2(c.debtBudget - c.debtSpent)},
+    savings: {owed: c.savings, moved: c.savingsMoved, toMove: led ? led.left : r2(c.savings - c.savingsMoved), pool: savingsPool()},
+    review: {pending: pend.length, oldest: pend.length ? pend.map(i => i.date).filter(Boolean).sort()[0] || null : null},
+    goals: gs.map(g => ({name: g.name, target: g.target, saved: g.saved, eta: g.eta ? iso(g.eta).slice(0, 7) : null})),
+    milestones: recent,
+    subs: {upcoming, changes, count: subs.length, yearly: r2(subs.reduce((a, s) => a + s.yearly, 0))},
+    topCats, daily, dailyFrom: from > list[0] ? from : list[0]
+  };
+}
+async function lbPublish(force){
+  if (!store.cloud || !FB.db || !S.ready) return;
+  let s; try{ s = lbSummary(); }catch(e){ return; }
+  if (!s) return;
+  const json = JSON.stringify(s), day = todayIso();
+  if (!force && json === LB.last && LB.day === day) return;
+  try{
+    await FB.db.collection("users").doc(store.cloud.uid).collection("summary").doc("lifebud").set({json, at: Date.now(), v: 1});
+    LB.last = json; LB.day = day;
+  }catch(e){ /* quiet: the summary is optional */ }
+}
+function lbSchedule(){ if (!store.cloud) return; clearTimeout(LB.timer); LB.timer = setTimeout(() => lbPublish(false), 4000); }
+function lbCode(){
+  const cfg = fbConfig(), u = FB.auth && FB.auth.currentUser;
+  if (!cfg || !u || !u.refreshToken) return "";
+  return "LBPD1." + btoa(JSON.stringify({k: cfg.apiKey, p: cfg.projectId, u: u.uid, r: u.refreshToken}));
+}
+function lbGoFromUrl(){
+  const m = /^#go=(\w+)/.exec(location.hash); if (!m) return;
+  const view = m[1], ok = ["home", "review", "accounts", "subs", "trends", "settings"];
+  history.replaceState(null, "", location.pathname);
+  if (!ok.includes(view)) return;
+  let tries = 0; const t = setInterval(() => { if (S.ready || ++tries > 40){ clearInterval(t); if (S.ready) go(view); } }, 250);
+}
+
 function whatsNewSheet(){
   openSheet(`<h2>What’s new</h2><p class="muted" style="margin:-6px 0 12px">You’re on <b style="color:var(--ink)">${verLabel()}</b>, from ${esc(short(APP_DATE))}.</p>
     <div class="list">${CHANGES.map(([v, d, note]) => `<div style="padding:12px 14px;border-top:1px solid var(--line)"><b>v${v}</b> <span class="small muted">${esc(short(d))}</span><div class="small" style="margin-top:2px">${esc(note)}</div></div>`).join("")}</div>`);
@@ -3473,6 +3546,7 @@ async function attachCloud(u){
     if (S.ready && snap.metadata.hasPendingWrites) return;
     const docs = {}; snap.docs.forEach(d => { docs[d.id] = d.data(); });
     writeLocal(docs); applyDocs(docs); S.ready = true;
+    lbSchedule();
     if (isTyping() || $("#sheetRoot").innerHTML) S.deferRender = true; else render();
   }, err => toast("Sync paused (" + (err.code || "error") + "). Your changes are saved on this device."));
   ref.onSnapshot({includeMetadataChanges: true}, snap => { SYNC.pending = snap.docs.filter(d => d.metadata.hasPendingWrites).length; SYNC.fromCache = snap.metadata.fromCache; if (!SYNC.pending && !SYNC.fromCache) SYNC.at = Date.now(); paintSync(); }, () => {});
@@ -3890,6 +3964,14 @@ document.addEventListener("click", async e => {
     lsSet("payday-fb", JSON.stringify(cfg)); initFirebase(); render(); toast("Saved. Now sign in with Google.");
   }
   else if (a === "fb-signin") signIn();
+  else if (a === "lb-now"){ await lbPublish(true); toast("LifeBud summary updated."); }
+  else if (a === "lb-code"){
+    const code = lbCode();
+    if (!code){ toast("Sign in with Google first."); }
+    else { await lbPublish(true);
+      try{ await navigator.clipboard.writeText(code); toast("Code copied. Paste it in LifeBud > Settings > Payday."); }
+      catch(_){ openSheet(`<h2>LifeBud code</h2><p class="muted">Copy this and paste it in LifeBud under Settings > Payday. Keep it private.</p><textarea class="input" readonly>${esc(code)}</textarea><div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" data-act="close">Done</button></div>`); } }
+  }
   else if (a === "fb-signout"){ if (FB.auth) FB.auth.signOut(); }
   else if (a === "fb-remove"){ if (FB.auth && FB.user) FB.auth.signOut(); lsSet("payday-fb", null); lsSet("payday-linked", null); toast("Sync setup removed. Reload the app to finish."); render(); }
   else if (a === "fb-link"){
@@ -4052,7 +4134,7 @@ $("#fab").addEventListener("click", () => txSheet(null));
 try{ const t = localStorage.getItem("payday-theme"); if (t && t !== "auto") document.documentElement.dataset.theme = t; }catch(_){}
 function applyZoom(){ const z = parseFloat(lsGet("payday-zoom") || "1") || 1; document.body.style.zoom = z === 1 ? "" : String(z); }
 applyZoom();
-takeLinkFromUrl(); localBoot(); setupPWA(); initFirebase(); takeSharedFile(); takeShortcut();
+lbGoFromUrl(); takeLinkFromUrl(); localBoot(); setupPWA(); initFirebase(); takeSharedFile(); takeShortcut();
 // "What changed while you were away" counts from the last time this device was used.
 if (!lsGet("payday-lastseen")) lsSet("payday-lastseen", String(Date.now()));
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden" && !awaySummary()) lsSet("payday-lastseen", String(Date.now())); });
