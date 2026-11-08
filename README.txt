@@ -93,3 +93,7 @@ Payday saves a small summary (numbers only) in your Firebase after you use it. I
 BUDGETS AND BILLS (version 43 and later)
 Settings > Tools > Budgets: a limit per paycheck for any category, with a warning at 80% (you can change it) and a message when Personal drops below an amount you choose.
 Settings > Tools > Bills: add bills, or tap "Track as a bill" on a repeating charge. A bill is marked paid by itself when its charge shows up (once you've confirmed it in Review).
+
+
+UPDATE BUTTON (version 44 and later)
+The Update button at the top right of every screen lets you choose the update zip from anywhere. The first time, save your GitHub repo and token in Settings > Update the app.

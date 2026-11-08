@@ -62,7 +62,13 @@ nav.tabs button[aria-current="page"] .ico{background:var(--personal);color:var(-
 nav.tabs .ico{display:grid;place-items:center;width:52px;height:30px;border-radius:15px}
 .badge{position:absolute;top:4px;left:calc(50% + 8px);min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--debt);color:#fff;font-size:11px;font-weight:700;display:grid;place-items:center}
 .brand{display:none}
-main{max-width:760px;margin:0 auto;padding:16px 16px calc(96px + env(safe-area-inset-bottom,0px))}
+main{max-width:760px;margin:0 auto;padding:56px 16px calc(96px + env(safe-area-inset-bottom,0px))}
+.updbtn{position:fixed;top:calc(10px + env(safe-area-inset-top,0px));right:12px;z-index:25;display:inline-flex;align-items:center;justify-content:center;gap:6px;height:36px;padding:0 13px;border-radius:18px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+.updbtn:hover{background:var(--sunk)}
+.updbtn svg{width:18px;height:18px;flex:none}
+.updbtn input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+@media (max-width:560px){.updbtn{width:36px;padding:0}.updbtn span{display:none}}
+
 @media (min-width:900px){
   nav.tabs{top:0;right:auto;bottom:0;width:220px;flex-direction:column;border-top:0;border-right:1px solid var(--line);padding:calc(20px + env(safe-area-inset-top,0px)) 12px 20px;gap:4px}
   nav.tabs button{flex:0;flex-direction:row;gap:12px;padding:6px 8px;font-size:16px;border-radius:12px;justify-content:flex-start}
@@ -70,7 +76,8 @@ main{max-width:760px;margin:0 auto;padding:16px 16px calc(96px + env(safe-area-i
   nav.tabs .ico{width:44px;height:32px}
   .badge{position:static;margin-left:auto}
   .brand{display:block;font-family:var(--display);font-weight:800;font-size:24px;padding:4px 12px 20px}
-  main{margin-left:220px;max-width:none;padding:28px 40px 60px}
+  main{margin-left:220px;max-width:none;padding:64px 40px 60px}
+  .updbtn{right:24px}
   .home-grid{display:grid;grid-template-columns:minmax(320px,420px) 1fr;gap:32px;align-items:start}
   .home-grid > .col-left{position:sticky;top:28px}
 }
@@ -118,7 +125,7 @@ main{max-width:760px;margin:0 auto;padding:16px 16px calc(96px + env(safe-area-i
 nav.tabs .navver{display:none}
 @media (min-width:900px){nav.tabs .navver{display:block;flex:0;margin-top:auto;padding:8px 12px;font-size:12px;color:var(--muted);background:none;border:0;text-align:left;cursor:pointer}}
 #printRoot{display:none}
-@media print{
+@media print{.updbtn{display:none !important}
   body.printing > *:not(#printRoot){display:none !important}
   body.printing #printRoot{display:block}
   body.printing{background:#fff;color:#000}
@@ -296,6 +303,7 @@ svg.chart text{fill:var(--muted);font-size:11px;font-family:var(--body)}
 </style>
 </head>
 <body>
+<label class="updbtn" id="updBtn" title="Update the app" aria-label="Update the app"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5"/><path d="M5 19h14"/></svg><span>Update</span><input type="file" id="updateTop" accept="*/*"></label>
 <div class="shell">
   <nav class="tabs" id="tabs" aria-label="Main"></nav>
   <main id="main"><div class="loading"><div><span class="spinner"></span> Loading</div></div></main>
@@ -346,8 +354,9 @@ const SOURCES = {
 };
 /* ---------- version ---------- */
 // Bump APP_VERSION (and the cache name in sw.js to match) with every update, and add a line to CHANGES.
-const APP_VERSION = 43, APP_DATE = "2026-11-08";
+const APP_VERSION = 44, APP_DATE = "2026-11-08";
 const CHANGES = [
+  [44, "2026-11-08", "An Update button at the top right of every screen: choose the update zip from anywhere, no trip to Settings."],
   [43, "2026-11-08", "Budgets per paycheck with warnings, a low-Personal alert, and Bills that mark themselves paid when the charge shows up (with suggestions from repeating charges). All of it shows in LifeBud too."],
   [42, "2026-11-08", "LifeBud link: Payday saves a numbers-only summary (paycheck buckets, goals, Review count, subscriptions) that LifeBud can show. Settings > Sync > LifeBud."],
   [41, "2026-11-06", "Pending charges now show first in What the pull found."],
@@ -1350,6 +1359,11 @@ async function prepareUpdate(file){
       <div class="small" style="margin-bottom:14px;line-height:1.7">${changed.map(f => `<div>${esc(f.name)}${f.isNew ? ' <span class="muted">(new)</span>' : ""}</div>`).join("")}</div>
       <div class="row" style="justify-content:flex-end"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="gh-push">Publish</button></div>`);
   }catch(err){ toast(err.message || "Something went wrong reading the update."); }
+}
+function headerUpdate(file){
+  const c = ghRead();
+  if (!c.repo || !c.token){ toast("First save your GitHub repo and token in Settings > Update the app."); go("settings"); return; }
+  prepareUpdate(file);
 }
 async function pushUpdate(){
   const u = S.update; if (!u) return;
@@ -4238,6 +4252,7 @@ document.addEventListener("change", e => {
   if (e.target.dataset && e.target.dataset.act === "plaid-map"){ S.settings = {...S.settings, plaidMap: {...(S.settings.plaidMap || {}), [e.target.dataset.id]: e.target.value}, kind:"settings"}; store.save("settings", S.settings); toast("Got it."); return; }
   if (e.target.id === "gh-repo"){ ghSet({repo: e.target.value.trim().replace(/^https?:\/\/github\.com\//, "").replace(/\/$/, "")}); return; }
   if (e.target.id === "gh-token"){ ghSet({token: e.target.value.trim()}); return; }
+  if (e.target.id === "updateTop" && e.target.files.length){ headerUpdate(e.target.files[0]); e.target.value = ""; return; }
   if (e.target.id === "updateIn" && e.target.files.length){ prepareUpdate(e.target.files[0]); e.target.value = ""; return; }
   if (e.target.id === "restoreIn" && e.target.files.length){ readBackup(e.target.files[0]); e.target.value = ""; return; }
   if (e.target.id === "fileIn" && e.target.files.length){ handleFiles([...e.target.files]); e.target.value = ""; }
