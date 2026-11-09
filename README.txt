@@ -2,6 +2,9 @@ PAYDAY - SETUP GUIDE
 ====================
 
 LIVE BANK PULLS: see SETUP-PLAID.txt (Accounts tab).
+v42/v43 NOTE: for bank balances, automatic pulls and phone alerts, update your server once (see "PART D" in SETUP-PLAID.txt).
+The tests folder is optional: on a computer with Node,
+run  node tests/run-tests.js  to check the money math.
 
 
 UPDATING YOUR SITE FROM INSIDE THE APP (after the one-time setup in Settings > Update the app)
@@ -85,15 +88,3 @@ IF SOMETHING GOES WRONG
   APIs & Services > OAuth consent screen. If it's in Testing, add your Gmail under Test users
   (or click Publish app).
 - Sign-in window doesn't appear: allow pop-ups for your Payday site in the browser.
-
-
-CONNECTING LIFEBUD (optional, version 42 and later)
-Payday saves a small summary (numbers only) in your Firebase after you use it. In Payday: Settings > Sync > LifeBud > Copy LifeBud code, then paste that code in LifeBud under Settings > Payday. The code lets LifeBud read your Payday data, so keep it private.
-
-BUDGETS AND BILLS (version 43 and later)
-Settings > Tools > Budgets: a limit per paycheck for any category, with a warning at 80% (you can change it) and a message when Personal drops below an amount you choose.
-Settings > Tools > Bills: add bills, or tap "Track as a bill" on a repeating charge. A bill is marked paid by itself when its charge shows up (once you've confirmed it in Review).
-
-
-UPDATE BUTTON (version 44 and later)
-The Update button at the top right of every screen lets you choose the update zip from anywhere. The first time, save your GitHub repo and token in Settings > Update the app.

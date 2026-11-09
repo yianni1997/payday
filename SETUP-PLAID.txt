@@ -44,6 +44,34 @@ PART C - IN PAYDAY
    Pending charges are skipped until they post. Re-pulling is safe: anything already
    imported or confirmed is skipped.
 
+UPDATING YOUR SERVER FOR v42 (bank balances for Net worth and the low-checking warning)
+1. console.cloud.google.com > Cloud Run functions > payday-server > Edit source (or "Source" tab > Edit).
+2. Replace index.js with the new server/index.js from this zip. package.json is unchanged.
+3. Save and redeploy. Wait a few minutes.
+4. In Payday, open the Accounts tab once. Balances now show on Plan > Net worth.
+Everything else in v42 works without this step.
+
+PART D - AUTOMATIC PULLS AND PHONE ALERTS (v43, optional, about 10 minutes)
+1. Update the server: Cloud Run functions > payday-server > Edit source. Replace BOTH index.js and
+   package.json with the ones in this zip's "server" folder (package.json adds "web-push").
+2. Add one more variable (Variables & secrets):
+       CRON_SECRET = any long random text you make up, e.g. 7f3k29xq-payday-81mz
+   Save and redeploy.
+3. Search for "Cloud Scheduler" > Create job.
+   - Name: payday-auto-pull     - Frequency: 0 */3 * * *   (every 3 hours)   - Time zone: yours
+   - Target type: HTTP, Method: GET
+   - URL: your server link + ?cron= + your CRON_SECRET, for example
+       https://payday-server-xxxx.run.app/?cron=7f3k29xq-payday-81mz
+   Create. Then tap "Force run" once. The first run only takes charges from the last 3 days.
+4. On each phone or computer you want alerts on: open Payday > Accounts >
+   "Turn on alerts on this device", allow notifications, then "Send a test".
+   iPhone: alerts only work when Payday is opened from the home-screen icon.
+How it works: every 3 hours the server asks Plaid for new posted charges and drops them where
+only your signed-in Payday can read them. Next time Payday is open they go to Review like a pull.
+Cloud Scheduler gives 3 free jobs a month, so this stays free.
+Security log: failed or suspicious requests are logged. In Google Cloud > Logging, search
+payday_security to see them.
+
 GOOD TO KNOW
 - The PayPal Mastercard is issued by Synchrony and often can't be connected. If it doesn't
   show up, keep using a CSV or PDF for it on the Import tab (PDF import is built in).
