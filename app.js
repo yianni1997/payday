@@ -39,8 +39,10 @@ const SOURCES = {
 };
 /* ---------- version ---------- */
 // Bump APP_VERSION (and the cache name in sw.js to match) with every update, and add a line to CHANGES.
-const APP_VERSION = 43, APP_DATE = "2026-11-09";
+const APP_VERSION = 45, APP_DATE = "2026-11-09";
 const CHANGES = [
+  [45, "2026-11-09", "End-of-paycheck forecast, Upcoming paychecks, emergency fund months, Can I afford it? with a 48-hour wait list, suggested limits, bills found from repeating charges, undo for Plan deletes, copy a summary, recent searches, paste a bank text, debt balances that follow your payments, savings in net worth, trip and event budgets, no-spend challenge, tap a limit to see its charges, this-week total, Not worth it."],
+  [44, "2026-11-09", "Sort a charge straight from the alert, auto-confirm your usual charges (Review → Confirmed for you), monthly check-in with one-tap fixes, and a tidier Plan page with folding sections and jump buttons."],
   [43, "2026-11-09", "Automatic bank pulls with phone alerts (server step), pay stubs, card statement timing, tax helper, Your year recap, charged-twice and unusual-charge warnings, rule counts, category icons, demo mode, export to Google Sheets, fingerprint unlock, automatic round-ups, split a charge into an IOU. The app is now split into a few files."],
   [42, "2026-11-09", "New Plan page: bills with due dates, yearly costs, spending limits, debt payoff planner, net worth, IOUs, refunds/trials/returns, gas log, What if, savings growth. Safe to spend per day with a pace bar, payday countdown, no-spend streaks and biggest change on the Paycheck screen. Smart search (\u201cdining last month\u201d), averages per charge, calendar file, hide amounts, PIN lock, low-checking and bank sign-in warnings, app icon badge, buzz on swipe."],
   [41, "2026-11-06", "Pending charges now show first in What the pull found."],
@@ -272,6 +274,7 @@ function tabList(){ const mid = ((S.settings && S.settings.tabs) || DEFAULT_TABS
 const TABS = [["home","Paycheck"],["review","Review"],["import","Import"],["accounts","Accounts"],["trends","Trends"],["settings","Settings"]];
 function renderTabs(){
   const n = pending().length;
+  if (n && typeof autoConfirmSoon === "function") autoConfirmSoon();
   // Number on the app icon (Android/desktop installs that support it).
   try{ if (navigator.setAppBadge){ if (n) navigator.setAppBadge(n).catch(() => {}); else navigator.clearAppBadge().catch(() => {}); } }catch(_){}
   $("#tabs").innerHTML = '<div class="brand">Payday</div>' + tabList().map(([k,l]) =>
@@ -304,13 +307,15 @@ function render(){
   else if (S.view === "starred") m.innerHTML = viewStarred();
   else if (S.view === "cats") m.innerHTML = viewCats();
   else if (S.view === "merges") m.innerHTML = viewMerges();
-  else if (S.view === "plan") m.innerHTML = viewPlan();
+  else if (S.view === "plan"){ m.innerHTML = viewPlan(); setTimeout(foldPlan, 0); }
   else if (S.view === "debt") m.innerHTML = viewDebt();
   else if (S.view === "networth") m.innerHTML = viewNetWorth();
   else if (S.view === "gas") m.innerHTML = viewGas();
   else if (S.view === "whatif") m.innerHTML = viewWhatIf();
   else if (S.view === "tax") m.innerHTML = viewTax();
   else if (S.view === "recap") m.innerHTML = viewRecap();
+  else if (S.view === "checkin") m.innerHTML = viewCheckin();
+  else if (S.view === "paydays") m.innerHTML = viewPaydays();
   else { m.innerHTML = viewSettings(); enhanceSettings(); }
   if (DEMO) m.insertAdjacentHTML("afterbegin", `<div class="banner" style="background:var(--personal);color:var(--on-personal);border:0"><span>🧪</span><span style="flex:1"><b>Demo mode</b><span class="small" style="display:block">Made-up data. Nothing is saved.</span></span><button class="btn sm" data-act="demo-end">Exit demo</button></div>`);
   m.insertAdjacentHTML("beforeend", `<button class="ver" data-act="whatsnew" aria-label="${verLabel()}, see what’s new">${verLabel()} • ${short(APP_DATE)}</button><div class="ver" style="margin-top:0;cursor:default" data-sync>${syncDot()} ${syncLabel()}</div>`);
@@ -574,6 +579,7 @@ function viewSearch(){
   const chip = (k, l) => `<button data-act="q-mode" data-m="${k}" aria-pressed="${mode===k}">${l}</button>`;
   return `<div class="topbar"><h1 style="display:flex;align-items:center;gap:12px"><button class="iconbtn" data-tab="home" aria-label="Back to Paycheck">${ICONS.left}</button>Search</h1></div>
   <input class="input" id="q" type="search" value="${esc(S.q || "")}" placeholder="Try “dining last month” or “amazon over $50”" autocomplete="off" style="margin-bottom:10px">
+  ${recentChips()}
   ${savedSearchChips()}
   ${filterPanel()}
   <div class="seg" style="margin-bottom:12px">${chip("amazon","Amazon")}${chip("amazon-unlabeled","Amazon without a label")}${chip("amazon-orders","Amazon orders")}${chip("all","Everything")}</div>
@@ -634,6 +640,7 @@ function viewHome(){
   if (nPend) banners.push(`<button class="banner" data-tab="review"><span class="dot" style="background:var(--debt)"></span><span><b>${nPend} charge${nPend>1?"s":""} waiting for review</b><span class="small muted">From your imported statements</span></span><span class="go">Review</span></button>`);
   const lb = lastBackup();
   if (!(FB.user && driveOn()) && (!lb || Math.round((toD(today) - toD(lb)) / 864e5) >= 14)) banners.push(`<button class="banner" data-act="backup"><span class="dot" style="background:var(--gas)"></span><span><b>${lb ? "Time for a backup" : "Back up your data"}</b><span class="small muted">${lb ? "Last one was " + short(lb) : "Everything is saved only on this device"}</span></span><span class="go">Back up</span></button>`);
+  if (latest && checkinDue()) banners.push(`<button class="banner" data-act="ci-open"><span class="dot" style="background:var(--savings)"></span><span><b>Your ${esc(monthName(lastMonthKey()))} check-in is ready</b><span class="small muted">A minute: how the month went and a few one-tap fixes</span></span><span class="go">Open</span></button>`);
   if (latest){ banners.push(...alertBanners(), ...planBanners()); setTimeout(plaidQuietLoad, 0); }
   if (latest && today >= addDays(nextPay, -1)) banners.push(`<button class="banner" data-act="new-period"><span class="dot" style="background:var(--savings)"></span><span><b>Payday on ${short(nextPay)}?</b><span class="small muted">Start the next paycheck</span></span><span class="go">Start</span></button>`);
 
@@ -780,7 +787,7 @@ function viewReview(){
   const head = `${items.length && matchMedia("(max-width:899px)").matches && !S.rsel ? `<p class="small muted" style="margin:0 0 8px">Tip: swipe a charge right to confirm, left to deny.</p>` : ""}<div class="topbar"><h1>Review</h1><button class="btn ghost sm desk-only" data-act="compact-toggle">${isCompact() ? "Roomy view" : "Compact view"}</button></div>${items.length ? `<p class="small muted kbd-hint" style="margin:-8px 0 12px">Keyboard: ↑ ↓ move, C confirm, D deny, E edit (or open a group), U undo. Pick a fund: P Personal, G Gas, B Debt, S Savings, I Extra income, F Refund, Y Paycheck, X Skip. Space selects in Select mode.</p>` : ""}`;
   const den = deniedNow().sort((a,b) => b.date.localeCompare(a.date));
   const deniedHtml = den.length ? `<details class="dups"><summary>Denied this paycheck (${den.length})</summary>${den.map(it => `<article class="rv"><div class="top"><div class="mid"><div class="desc">${esc(it.desc)}</div><div class="meta">${esc(short(it.date))} • <span class="chip">${esc(SOURCES[it.src]||it.src)}</span></div></div><div class="amt num ${it.flow>0?"in":""}">${it.flow>0?"+"+money(it.flow):money(-it.flow)}</div></div><div class="acts" style="margin-top:10px"><button class="btn sm" data-act="restore-denied" data-id="${esc(it.id)}">Restore to Review</button></div></article>`).join("")}</details>` : "";
-  if (!items.length && !dups.length) return head + deniedHtml + `<div class="list"><div class="empty"><h3>All caught up</h3>Import a statement and new charges will show up here for you to confirm.<div style="margin-top:14px"><button class="btn" data-tab="import">Import a statement</button></div></div></div>` + deniedHtml;
+  if (!items.length && !dups.length) return head + autoLogPanel() + deniedHtml + `<div class="list"><div class="empty"><h3>All caught up</h3>Import a statement and new charges will show up here for you to confirm.<div style="margin-top:14px"><button class="btn" data-tab="import">Import a statement</button></div></div></div>` + deniedHtml;
   const compact = isCompact();
   const gkey = it => [it.date, it.src, norm(it.orig || it.desc), it.flow < 0 ? "o" : "i"].join("|");
   const groups = {}; items.forEach(it => (groups[gkey(it)] = groups[gkey(it)] || []).push(it));
@@ -812,7 +819,7 @@ function viewReview(){
       <div class="row" style="justify-content:space-between;margin-bottom:8px"><b>${n} selected</b><span class="row"><button class="btn ghost sm" data-act="rsel-all">${n === items.length ? "Clear" : "Select all " + items.length}</button><button class="btn ghost sm" data-act="rsel-done">Done</button></span></div>
       <div class="row"><select class="input" data-act="rsel-set" style="width:auto;min-height:38px;padding:6px 10px" ${n ? "" : "disabled"} aria-label="Set where the selected charges go">${setOpts}</select><button class="btn sm" data-act="rsel-confirm" ${n ? "" : "disabled"}>Confirm ${n || ""}</button><button class="btn danger sm" data-act="rsel-deny" ${n ? "" : "disabled"}>Deny ${n || ""}</button></div>
     </div>` : `<div class="bulk"><span class="muted">${items.length} to review. The pre-selected choice is my best guess, and it learns from what you pick.</span><span class="row" style="gap:8px"><button class="btn ghost" data-act="rsel-start">Select</button><button class="btn yellow" data-act="confirm-all">Confirm all ${items.length}</button><button class="btn danger" data-act="deny-all">Deny all ${items.length}</button></span></div>`;
-  return head + reviewControls() + bar + body + dupHtml + deniedHtml;
+  return head + reviewControls() + autoLogPanel() + bar + body + dupHtml + deniedHtml;
 }
 
 /* ---------- import ---------- */
@@ -1284,7 +1291,7 @@ function txSheet(t){
   const isNew = !t;
   if (t && t.rcpt) setTimeout(() => loadReceipt(t.id), 30);
   t = t || {id:"", date: todayIso(), desc:"", amount:"", fund:"personal"};
-  openSheet(`<h2>${isNew?"Add a transaction":"Edit transaction"}</h2>
+  openSheet(`<h2>${isNew?"Add a transaction":"Edit transaction"}</h2>${isNew ? `<p style="margin:-6px 0 10px"><button class="btn ghost sm" data-act="paste-open">📋 Paste a bank text</button></p><div id="pasteBox" hidden style="margin-bottom:12px"><textarea class="input" id="pasteIn" style="min-height:70px;font-family:var(--body);font-size:14px" placeholder="Paste the text or email your bank sent, like: You made a $12.50 purchase at WAWA on 11/08"></textarea><div class="small muted" id="pasteMsg" style="margin-top:4px"></div></div>` : `<p style="margin:-6px 0 10px"><button class="btn ghost sm" data-act="tx-regret" data-id="${esc(t.id)}">${(t.tags || []).includes("not-worth-it") ? "👎 Marked not worth it (undo)" : "👎 Not worth it"}</button></p>`}
     <label class="field"><input class="input bigamt num" id="t-amt" inputmode="decimal" placeholder="$0.00" value="${t.amount===""?"":r2(t.amount)}" aria-label="Amount"><small style="text-align:center">Use a minus sign for a refund, like −24.64</small></label>
     ${isNew ? "" : `<p style="margin:-6px 0 12px"><button class="btn ghost sm" data-act="tx-split" data-id="${esc(t.id)}" style="margin-right:6px">Split with someone</button><button class="btn ghost sm" data-act="merchant" data-q="${esc(t.desc)}" data-o="${esc(t.orig || "")}">See every charge from “${esc(t.desc)}”</button></p>${(() => { const n = (S.settings.merchantNotes || {})[merchantOf(t)]; return n ? `<div class="note" style="margin:-4px 0 12px">📝 ${esc(merchantOf(t))}: ${esc(n)}</div>` : ""; })()}`}
     <label class="field"><span>What was it?</span><input class="input" id="t-desc" value="${esc(t.desc)}" placeholder="Where it was charged" ${isNew ? `list="merchant-list" data-new="1" autocomplete="off"` : ""}>${isNew ? `<datalist id="merchant-list">${merchantIndex().slice(0, 200).map(e => `<option value="${esc(e.desc)}">`).join("")}</datalist><small id="t-fillnote"></small>` : ""}</label>

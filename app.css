@@ -316,3 +316,9 @@ body.privacy svg.chart text,body.privacy .cal-d i{filter:blur(4px)}
 .rc-big{font-family:var(--display);font-weight:800;font-size:clamp(34px,10vw,48px);line-height:1.05;letter-spacing:-.02em;overflow-wrap:anywhere}
 .rc-sub{font-size:15px;opacity:.8}
 @media (min-width:900px){.rc-row{margin:0;padding-left:2px}}
+
+/* v44: folding Plan sections */
+.pfold-h{cursor:pointer;display:flex;align-items:center;gap:8px}
+.pfold-h::after{content:"▾";font-size:16px;color:var(--muted);transition:transform .15s}
+.panel.pfold .pfold-h::after{transform:rotate(-90deg)}
+.panel.pfold > *:not(.row:first-child):not(h2){display:none}

@@ -1,6 +1,6 @@
 // Payday offline support: keeps the app itself working with no connection.
 // Only the app's own files are cached. Sync and Google requests always go straight to the network.
-const CACHE = "payday-v43";
+const CACHE = "payday-v45";
 const SHELL = ["./", "index.html", "manifest.json", "pdf.min.js", "pdf.worker.min.js", "jszip.min.js", "icon-192.png", "icon-512.png",
   "firebase-app-compat.js", "firebase-auth-compat.js", "firebase-firestore-compat.js", "app.css", "app.js", "plan.js"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
@@ -34,11 +34,14 @@ self.addEventListener("fetch", e => {
 // Alerts from your Payday server ("3 new charges, $58.20"). Tapping one opens Review.
 self.addEventListener("push", e => {
   let d = {}; try{ d = e.data ? e.data.json() : {}; }catch(_){ d = {body: e.data && e.data.text()}; }
-  e.waitUntil(self.registration.showNotification(d.title || "Payday", {body: d.body || "New charges are in Review.", icon: "icon-192.png", badge: "icon-192.png", tag: d.tag || "payday-pull", renotify: true, data: {url: d.url || "./?go=review"}}));
+  e.waitUntil(self.registration.showNotification(d.title || "Payday", {body: d.body || "New charges are in Review.", icon: "icon-192.png", badge: "icon-192.png", tag: d.tag || "payday-pull", renotify: true, actions: d.actions || [], data: {url: d.url || "./?go=review", pick: d.pick || null}}));
 });
 self.addEventListener("notificationclick", e => {
   e.notification.close();
-  const url = new URL((e.notification.data && e.notification.data.url) || "./?go=review", self.registration.scope).href;
+  const D = e.notification.data || {}, P = D.pick;
+  // An action button (Personal, Gas…) opens Payday with that choice; Payday files and confirms the charge.
+  const rel = e.action && P ? `./?go=pick&fund=${encodeURIComponent(e.action)}&d=${P.d}&a=${P.a}&n=${encodeURIComponent(P.n || "")}` : (D.url || "./?go=review");
+  const url = new URL(rel, self.registration.scope).href;
   e.waitUntil(self.clients.matchAll({type: "window", includeUncontrolled: true}).then(list => {
     for (const c of list) if (c.url.startsWith(self.registration.scope) && "focus" in c){ c.navigate(url).catch(() => {}); return c.focus(); }
     return self.clients.openWindow(url);

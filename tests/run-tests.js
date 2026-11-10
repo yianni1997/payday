@@ -17,13 +17,13 @@ const ctx = {
   sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
   document: dummy(), navigator: dummy(), location: { search: "", href: "http://x/", pathname: "/", origin: "http://x", hash: "" },
   history: dummy(), matchMedia: () => ({ matches: false, addEventListener(){} }), addEventListener(){}, removeEventListener(){},
-  fetch: () => Promise.reject(new Error("offline")), crypto: require("crypto").webcrypto, TextEncoder, TextDecoder, URL, Blob: function(){}, FormData: function(){},
+  fetch: () => Promise.reject(new Error("offline")), crypto: require("crypto").webcrypto, TextEncoder, TextDecoder, URL, URLSearchParams, Blob: function(){}, FormData: function(){},
   caches: dummy(), firebase: undefined, pdfjsLib: undefined, JSZip: undefined, Event: function(){}, CustomEvent: function(){}, requestAnimationFrame: () => 0,
 };
 ctx.window = ctx; ctx.self = ctx; ctx.globalThis = ctx;
 vm.createContext(ctx);
 vm.runInContext(code + `
-;globalThis.__api = {S, calc, periodList, todayIso, addDays, r2, parseQuery, billDates, billPaid, safeInfo, debtSim, sinkShare, whatIf, noSpendInfo, biggestChange, netWorth, gasStats, icsText, plan, addMonthsIso, paychecksUntil, watchArrived, parseStub, cardCycle, dupGroups, unusualCharges, ruleReach, moneyInMatches, recapData, taxData, roundUps, norm};`, ctx, { filename: "app.js+plan.js" });
+;globalThis.__api = {S, calc, periodList, todayIso, addDays, r2, parseQuery, billDates, billPaid, safeInfo, debtSim, sinkShare, whatIf, noSpendInfo, biggestChange, netWorth, gasStats, icsText, plan, addMonthsIso, paychecksUntil, watchArrived, parseStub, cardCycle, dupGroups, unusualCharges, ruleReach, moneyInMatches, recapData, taxData, roundUps, norm, sureFund, checkinData, checkinDue, forecastInfo, upcomingPaychecks, parseBankText, debtBal, challengeInfo, suggestedLimits, tagSpent, weekSpent, monthlyNeed};`, ctx, { filename: "app.js+plan.js" });
 const A = ctx.__api;
 
 let pass = 0, fail = 0;
@@ -200,6 +200,45 @@ const tx2 = Object.assign(tx("2026-03-03", 50, "personal", "Pizza"), {}); A.S.pe
 const T = A.taxData("2026");
 eq("tax: extra income + deductible", [T.extra, T.dedTotal, T.setAside], [50, 15, 12.5]);
 eq("recap totals", A.recapData("2026").spent, 50 + 15 - 30);
+
+// ---------- v44 ----------
+reset("2026-11-03");
+A.S.periods["2026-10-02"] = { date: "2026-10-02", amount: 1000, txns: [1, 2, 3, 4, 5].map(i => tx("2026-10-0" + (i + 2), 6 + i, "personal", "WAWA " + i)).concat([tx("2026-10-04", 80, "personal", "Pizza Hut"), tx("2026-10-05", 30, "personal", "Pizza Hut")]) };
+A.S.periods["2026-10-16"] = { date: "2026-10-16", amount: 1000, txns: [tx("2026-10-20", 40, "gas", "SUNOCO"), tx("2026-10-21", 40, "personal", "SUNOCO"), ...[1, 2, 3].map(i => tx("2026-10-2" + i, 40, "gas", "SUNOCO"))] };
+eq("sure: 5 Wawas, normal amount", A.sureFund({ flow: -9, desc: "WAWA 88" }), "personal");
+eq("not sure: way bigger than usual", A.sureFund({ flow: -40, desc: "WAWA 88" }), null);
+eq("not sure: mixed funds", A.sureFund({ flow: -40, desc: "SUNOCO" }), null);
+eq("not sure: too few visits", A.sureFund({ flow: -20, desc: "Pizza Hut" }), null);
+eq("not sure: money coming in", A.sureFund({ flow: 9, desc: "WAWA 88" }), null);
+A.S.periods["2026-09-04"] = { date: "2026-09-04", amount: 1000, txns: [tx("2026-09-10", 50, "personal", "Pizza Hut")] };
+const ci = A.checkinData("2026-10");
+eq("check-in month total", ci.cur.total, A.r2(7+8+9+10+11+80+30+40));
+eq("check-in vs usual", ci.avg, 50);
+eq("check-in due early in the month", A.checkinDue(), true);
+A.plan().opts.checkinSeen = "2026-10";
+eq("check-in not due once seen", A.checkinDue(), false);
+
+// ---------- v45 ----------
+reset("2026-11-08");
+A.S.periods["2026-10-30"] = { date: "2026-10-30", amount: 1000, txns: [tx("2026-11-01", 100), tx("2026-11-06", 100, "debt", "CHASE CARD PAYMENT")] };
+let I5 = A.safeInfo(), F5 = A.forecastInfo(I5);
+eq("forecast: 10/day so far, 4 more days", F5.end, A.r2(340 - 10 * 4));
+eq("forecast: half of leftover to savings", F5.toSave, 150);
+eq("week so far (Mon Nov 2 – Sun Nov 8)", A.weekSpent(), 0);
+A.plan().bills = [{ id: "b", name: "Rent", amount: 300, freq: "monthly", due: "2026-11-20", fund: "personal" }];
+const U5 = A.upcomingPaychecks(3);
+eq("rent lands on the Nov 13 paycheck", [U5[1].start, U5[1].fromPersonal, U5[1].free], ["2026-11-13", 300, 140]);
+eq("bank text", A.parseBankText("Chase: You made a $12.50 transaction with WAWA 8123 on Nov 7, 2026 at 3:02 PM"), { amount: 12.5, desc: "WAWA 8123", date: "2026-11-07" });
+eq("bank text with slash date", A.parseBankText("PayPal: You sent $40.00 USD to John Smith. 11/05").desc, "John Smith");
+eq("debt balance drops with payments after you set it", A.debtBal({ name: "Chase", balance: 1000, match: "chase card", asOf: "2026-11-01" }), 900);
+eq("payments before then don't count", A.debtBal({ name: "Chase", balance: 1000, match: "chase card", asOf: "2026-11-07" }), 1000);
+A.plan().challenge = { start: "2026-11-02", days: 7, cats: [] };
+const CH = A.challengeInfo();
+eq("challenge clean days", [CH.elapsed, CH.clean], [7, 7]);
+A.S.periods["2026-10-30"].txns.push(tx("2026-11-04", 9));
+eq("a slip breaks a day", A.challengeInfo().clean, 6);
+A.S.periods["2026-10-30"].txns.push(Object.assign(tx("2026-11-04", 55), { tags: ["vacation"] }), Object.assign(tx("2026-11-04", -5), { tags: ["vacation"] }));
+eq("tag spent (refunds count back)", A.tagSpent("vacation"), 50);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

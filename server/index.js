@@ -74,7 +74,15 @@ async function autoPullAll(){
     await db.collection('users').doc(uid).collection('docs').doc('autopull').set({ items: admin.firestore.FieldValue.arrayUnion(...items), _u: Date.now() }, { merge: true });
     const spent = items.filter(t => t.flow < 0).reduce((a, t) => a - t.flow, 0);
     const top = items.slice().sort((a, b) => a.flow - b.flow)[0];
-    await pushTo(uid, { title: `${items.length} new charge${items.length === 1 ? '' : 's'}${spent ? ', $' + spent.toFixed(2) : ''}`, body: items.length === 1 ? `${top.desc} ${top.flow < 0 ? '$' + (-top.flow).toFixed(2) : '+$' + top.flow.toFixed(2)}. Tap to review.` : `Biggest: ${top.desc} $${Math.abs(top.flow).toFixed(2)}. Tap to review.` }).catch(e => console.warn('push', e.message));
+    // One charge: add buttons so you can file it from the alert (Android/desktop show them).
+    const one = items.length === 1 && top.flow < 0;
+    const gasy = /shell|exxon|mobil|sunoco|speedway|citgo|valero|sheetz|getty|lukoil|circle k|fuel|bp\b|wawa gas|gulf|hess|marathon|chevron|texaco/i.test(top.desc);
+    await pushTo(uid, {
+      title: `${items.length} new charge${items.length === 1 ? '' : 's'}${spent ? ', $' + spent.toFixed(2) : ''}`,
+      body: items.length === 1 ? `${top.desc} ${top.flow < 0 ? '$' + (-top.flow).toFixed(2) : '+$' + top.flow.toFixed(2)}.${one ? ' Where does it go?' : ' Tap to review.'}` : `Biggest: ${top.desc} $${Math.abs(top.flow).toFixed(2)}. Tap to review.`,
+      actions: one ? (gasy ? [{ action: 'gas', title: 'Gas' }, { action: 'personal', title: 'Personal' }] : [{ action: 'personal', title: 'Personal' }, { action: 'review', title: 'Something else' }]) : [],
+      pick: one ? { d: top.date, a: (-top.flow).toFixed(2), n: top.desc.slice(0, 30) } : null,
+    }).catch(e => console.warn('push', e.message));
   }
   return total;
 }
