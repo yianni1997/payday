@@ -39,8 +39,9 @@ const SOURCES = {
 };
 /* ---------- version ---------- */
 // Bump APP_VERSION (and the cache name in sw.js to match) with every update, and add a line to CHANGES.
-const APP_VERSION = 49, APP_DATE = "2026-11-10";
+const APP_VERSION = 50, APP_DATE = "2026-11-10";
 const CHANGES = [
+  [50, "2026-11-10", "LifeBud stays current even when Payday is closed: your Payday server rebuilds the summary on every scheduled run (every 3 hours), using Payday's own code, with fresh bank balances. Payday also sends the summary right away when you close or leave it. Needs the server update (SETUP-PLAID.txt, LifeBud auto-refresh)."],
   [49, "2026-11-10", "Safer LifeBud link: the LifeBud code no longer contains your Google login. It now holds a one-time key for a read-only LifeBud sign-in that can only read the summary. Needs the server update and one Firestore rule (SETUP-PLAID.txt, LifeBud section). Make a new code and paste it in LifeBud."],
   [48, "2026-11-09", "LifeBud summary check now tells an old Payday server (no balances sent) apart from a bank that has no balances yet."],
   [47, "2026-11-09", "Update summary now (Settings > Sync > LifeBud) tells you exactly what was sent, or why no account balances were included."],

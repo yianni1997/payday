@@ -93,3 +93,18 @@ The old LifeBud code contained your Google login. The new one only lets LifeBud 
 4. In Payday: Settings > Sync > LifeBud > Copy LifeBud code. Paste it in LifeBud within the hour.
 5. Turn off the old code: Payday > Settings > Sync > sign out, then sign back in. That ends the
    Google login the old code carried. (Also delete the old code anywhere you pasted it.)
+
+LIFEBUD AUTO-REFRESH (v50, about 3 minutes)
+LifeBud now stays current even when Payday is closed. Every scheduled run (Part D, every 3 hours),
+your server rebuilds LifeBud's summary by running Payday's own code from your site, with fresh balances.
+1. Cloud Run functions > payday-server > Edit source:
+   - replace index.js with server/index.js from this zip
+   - add a NEW file: click + (Add file), name it exactly  summary.js  and paste server/summary.js
+   - package.json is unchanged
+   Save and redeploy, wait for the green check.
+2. Needs the Part D Cloud Scheduler job. Check Cloud Scheduler > payday-auto-pull shows recent
+   successful runs. Tap "Force run" once: the result should say "summaries": 1.
+3. Open Payday once after updating (so the server knows your page address). That's it.
+Optional: if your Payday page isn't at the address Payday last reported, add the variable
+PAYDAY_URL = your Payday page address (for example https://yourname.github.io/payday/).
+The server only ever runs code from your own site (ALLOWED_ORIGIN).

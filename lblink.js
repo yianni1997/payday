@@ -84,7 +84,11 @@ async function lbPublish(force){
     LB.last = json; LB.day = day;
   }catch(e){ LB.diag = "Couldn't save the summary (" + (e.code || "error") + ")."; }
 }
-function lbSchedule(){ if (!store.cloud) return; clearTimeout(LB.timer); LB.timer = setTimeout(() => lbPublish(false), 4000); }
+function lbSchedule(){ if (!store.cloud) return; clearTimeout(LB.timer); LB.pending = true; LB.timer = setTimeout(() => { LB.pending = false; lbPublish(false); }, 4000); }
+// v50: if Payday is closed or hidden before the 4-second wait ends, send the summary right away.
+function lbFlush(){ if (!LB.pending) return; clearTimeout(LB.timer); LB.pending = false; LB.balAt = Date.now(); lbPublish(false); }
+addEventListener("pagehide", lbFlush);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") lbFlush(); });
 // v49: the code holds a one-time key for a separate LifeBud sign-in that can ONLY read
 // users/<you>/summary/lifebud (see the Firestore rule in README.txt). It never holds your Google login.
 // The key works once, within an hour; after that LifeBud stays signed in as that read-only user.

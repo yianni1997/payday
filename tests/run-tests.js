@@ -23,7 +23,7 @@ const ctx = {
 ctx.window = ctx; ctx.self = ctx; ctx.globalThis = ctx;
 vm.createContext(ctx);
 vm.runInContext(code + `
-;globalThis.__api = {lbSummary, lbCode, lbAccounts, S, calc, periodList, todayIso, addDays, r2, parseQuery, billDates, billPaid, safeInfo, debtSim, sinkShare, whatIf, noSpendInfo, biggestChange, netWorth, gasStats, icsText, plan, addMonthsIso, paychecksUntil, watchArrived, parseStub, cardCycle, dupGroups, unusualCharges, ruleReach, moneyInMatches, recapData, taxData, roundUps, norm, sureFund, checkinData, checkinDue, forecastInfo, upcomingPaychecks, parseBankText, debtBal, challengeInfo, suggestedLimits, tagSpent, weekSpent, monthlyNeed};`, ctx, { filename: "app.js+plan.js" });
+;globalThis.__api = {applyDocs, lbSummary, lbSummary, lbCode, lbAccounts, S, calc, periodList, todayIso, addDays, r2, parseQuery, billDates, billPaid, safeInfo, debtSim, sinkShare, whatIf, noSpendInfo, biggestChange, netWorth, gasStats, icsText, plan, addMonthsIso, paychecksUntil, watchArrived, parseStub, cardCycle, dupGroups, unusualCharges, ruleReach, moneyInMatches, recapData, taxData, roundUps, norm, sureFund, checkinData, checkinDue, forecastInfo, upcomingPaychecks, parseBankText, debtBal, challengeInfo, suggestedLimits, tagSpent, weekSpent, monthlyNeed};`, ctx, { filename: "app.js+plan.js" });
 const A = ctx.__api;
 
 let pass = 0, fail = 0;
@@ -252,4 +252,31 @@ eq("link: bills carry a next date", LBS.bills.map(b => [b.name, b.amount, b.next
 eq("link: summary stays small and has no store names", JSON.stringify(LBS).length < 100000 && !/Pizza|VERIZON|Store/.test(JSON.stringify(LBS)), true);
 (async () => { const r = await A.lbCode(); eq("link: no code when not signed in", r, { err: "Sign in with Google first." }); })();
 eq("link: code no longer contains a refresh token", /refreshToken/.test(fs.readFileSync(path.join(__dirname, "..", "lblink.js"), "utf8").replace(/\/\/.*$/gm, "")), false);
+// ---------- v50: server summary = page summary ----------
+{
+  const { buildSummary } = require(path.join(__dirname, "..", "server", "summary.js"));
+  const pageCode = ["app.js", "lblink.js", "plan.js"].map(f => fs.readFileSync(path.join(__dirname, "..", f), "utf8")).join("\n;\n");
+  const NOW = "2026-11-08T12:00:00";
+  const docs = {
+    settings: { personalPct: 0.44, savingsPct: 0.46, debtPct: 0.05, gasBudget: 60, extraSavingsPct: 0.5, extraGasPct: 0, leftoverFrom: "2026-10-16", leftoverSavePct: 0.5, selfName: "Me" },
+    "p-2026-10-16": { kind: "period", date: "2026-10-16", amount: 1000, txns: [{ id: "a", date: "2026-10-20", amount: 30, fund: "personal", desc: "Pizza Hut" }] },
+    "p-2026-10-30": { kind: "period", date: "2026-10-30", amount: 1000, txns: [{ id: "b", date: "2026-11-01", amount: 80, fund: "personal", desc: "Wegmans" }] },
+    inbox: { items: [{ id: "i1", fp: "x1", src: "chase_bank", date: "2026-11-06", desc: "STARBUCKS", flow: -6.45, status: "pending", fund: "personal" }], seen: [] },
+    plan: { bills: [{ id: "b1", name: "Phone", amount: 40, freq: "monthly", due: "2026-11-20", fund: "personal" }], limits: { Dining: 100 }, balances: { x: { name: "Checking", type: "depository", subtype: "checking", cur: 500, at: "2026-11-08" } } },
+  };
+  const srv = buildSummary(pageCode, docs, { url: "http://x/", now: NOW });
+  reset("2026-11-08"); A.applyDocs(JSON.parse(JSON.stringify(docs))); A.S.ready = true;
+  eq("server summary matches the page's, field for field", JSON.stringify(srv), JSON.stringify(A.lbSummary()));
+  eq("server summary has the Review count", srv.review.pending, 1);
+  const withNew = JSON.parse(JSON.stringify(docs));
+  withNew.autopull = { items: [
+    { id: "t1", accountId: "acc1", type: "depository", subtype: "checking", inst: "Chase", date: "2026-11-07", desc: "SHELL OIL", flow: -41.2 },
+    { id: "t2", accountId: "acc1", type: "depository", subtype: "checking", inst: "Chase", date: "2026-11-01", desc: "Wegmans", flow: -80 },
+  ] };
+  const s2 = buildSummary(pageCode, withNew, { url: "http://x/", now: NOW });
+  eq("new bank charge counts, one Payday already has doesn't", s2.review.pending, 2);
+  const s3 = buildSummary(pageCode, docs, { url: "http://x/", now: NOW, items: [{ itemId: "i", institution: "Chase", accounts: [{ id: "x", name: "Checking", mask: "1234", type: "depository", subtype: "checking", current: 812.5, available: 800, limit: null }], error: null }] });
+  eq("fresh bank balance used", s3.accounts.map(a => a.current), [812.5]);
+}
+
 setTimeout(() => { console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0); }, 50);

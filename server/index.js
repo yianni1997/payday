@@ -87,6 +87,56 @@ async function autoPullAll(){
   return total;
 }
 
+// ---------- LifeBud summary from the server (v50) ----------
+// Runs Payday's own page code (fetched from your site, so it always matches the version you use)
+// to rebuild users/<you>/summary/lifebud, so LifeBud stays fresh even when Payday is closed.
+const { buildSummary } = require('./summary');
+const PAGE_FILES = ['app.js', 'lblink.js', 'plan.js'];   // same order as index.html loads them
+const codeCache = { base: '', at: 0, code: '' };
+async function pageCode(base){
+  if (codeCache.base === base && Date.now() - codeCache.at < 10 * 60 * 1000) return codeCache.code;
+  const parts = [];
+  for (const f of PAGE_FILES){
+    const r = await fetch(new URL(f, base).href, { cache: 'no-store' });
+    if (!r.ok) throw new Error(`Couldn't load ${f} from your site (${r.status}).`);
+    parts.push(await r.text());
+  }
+  Object.assign(codeCache, { base, at: Date.now(), code: parts.join('\n;\n') });
+  return codeCache.code;
+}
+async function freshItems(uid){
+  const snap = await db.collection('plaidItems').where('uid', '==', uid).get();
+  return Promise.all(snap.docs.map(async d => {
+    const it = d.data();
+    try { const a = await plaid('/accounts/get', { access_token: it.accessToken }); return { itemId: it.itemId, institution: it.institution, accounts: a.accounts.map(acct), error: null }; }
+    catch (e) { return { itemId: it.itemId, institution: it.institution, accounts: [], error: { code: e.code, message: e.message } }; }
+  }));
+}
+async function publishSummary(uid){
+  const userRef = db.collection('users').doc(uid), sumRef = userRef.collection('summary').doc('lifebud');
+  const prev = (await sumRef.get()).data();
+  // The page's address: from the last summary the page sent, or PAYDAY_URL, or your allowed site.
+  let base = process.env.PAYDAY_URL || '';
+  try { if (!base && prev && prev.json) base = JSON.parse(prev.json).url || ''; } catch (_) {}
+  if (!base) base = ORIGIN + '/';
+  if (!base.endsWith('/')) base = base.replace(/[^/]*$/, '');
+  if (!ORIGIN || new URL(base).origin !== ORIGIN) throw new Error('Payday page address is not your allowed site.'); // only ever run your own code
+  const snap = await userRef.collection('docs').get(), docs = {};
+  snap.docs.forEach(d => { docs[d.id] = d.data(); });
+  if (!Object.keys(docs).length) return false;
+  const s = buildSummary(await pageCode(base), docs, { url: base, items: await freshItems(uid) });
+  if (!s) return false;
+  s.from = 'server';
+  await sumRef.set({ json: JSON.stringify(s), at: Date.now(), v: 1 });
+  return true;
+}
+async function publishAll(){
+  const uids = new Set((await db.collection('plaidItems').get()).docs.map(d => d.data().uid));
+  let n = 0;
+  for (const uid of uids){ try { if (await publishSummary(uid)) n++; } catch (e) { console.warn('summary failed', e.message); } }
+  return n;
+}
+
 async function plaid(path, body) {
   const r = await fetch(BASE + path, {
     method: 'POST',
@@ -134,7 +184,11 @@ functions.http('payday', async (req, res) => {
   const cron = req.query.cron || req.get('x-payday-cron');
   if (cron !== undefined){
     if (!CRON_SECRET || cron !== CRON_SECRET){ warn('bad_cron_secret', req); return res.status(403).send('no'); }
-    try { const n = await autoPullAll(); return res.json({ ok: true, added: n }); }
+    try {
+      const n = await autoPullAll();
+      const summaries = await publishAll().catch(e => { console.warn('summaries', e.message); return 0; });
+      return res.json({ ok: true, added: n, summaries });
+    }
     catch (e) { console.error('auto pull', e); return res.status(500).json({ error: e.message }); }
   }
   const origin = req.get('origin') || '';
@@ -168,6 +222,7 @@ functions.http('payday', async (req, res) => {
       const token = await admin.auth().createCustomToken('lifebud-' + uid, { lb: uid });
       return res.json({ token });
     }
+    if (action === 'summary_now') return res.json({ ok: await publishSummary(uid) });
     if (action === 'vapid') return res.json({ key: (await vapid()).publicKey });
     if (action === 'subscribe') {
       const sub = p.sub || {};
