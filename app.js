@@ -39,8 +39,9 @@ const SOURCES = {
 };
 /* ---------- version ---------- */
 // Bump APP_VERSION (and the cache name in sw.js to match) with every update, and add a line to CHANGES.
-const APP_VERSION = 45, APP_DATE = "2026-11-09";
+const APP_VERSION = 46, APP_DATE = "2026-11-09";
 const CHANGES = [
+  [46, "2026-11-09", "LifeBud link is back: Payday saves a numbers-only summary (paycheck buckets, goals, Review count, subscriptions, spending limits, bills) plus your live account balances, so LifeBud's Net worth uses your real accounts. Settings > Sync > LifeBud."],
   [45, "2026-11-09", "End-of-paycheck forecast, Upcoming paychecks, emergency fund months, Can I afford it? with a 48-hour wait list, suggested limits, bills found from repeating charges, undo for Plan deletes, copy a summary, recent searches, paste a bank text, debt balances that follow your payments, savings in net worth, trip and event budgets, no-spend challenge, tap a limit to see its charges, this-week total, Not worth it."],
   [44, "2026-11-09", "Sort a charge straight from the alert, auto-confirm your usual charges (Review → Confirmed for you), monthly check-in with one-tap fixes, and a tidier Plan page with folding sections and jump buttons."],
   [43, "2026-11-09", "Automatic bank pulls with phone alerts (server step), pay stubs, card statement timing, tax helper, Your year recap, charged-twice and unusual-charge warnings, rule counts, category icons, demo mode, export to Google Sheets, fingerprint unlock, automatic round-ups, split a charge into an IOU. The app is now split into a few files."],
@@ -143,12 +144,14 @@ const store = {
     if (DEMO) return Promise.resolve(); // demo mode never saves
     body._u = Date.now();
     const all = readLocal(); all[id] = cleanDoc(body); writeLocal(all);
+    if (typeof lbSchedule === "function") lbSchedule();
     if (this.cloud) return this.cloud.ref.doc(id).set(cleanDoc(body)).catch(e => toast("Couldn’t sync a change (" + (e.code || "error") + "). It’s still saved on this device."));
     return Promise.resolve();
   },
   remove(id){
     if (DEMO) return Promise.resolve();
     const all = readLocal(); delete all[id]; writeLocal(all);
+    if (typeof lbSchedule === "function") lbSchedule();
     if (this.cloud) return this.cloud.ref.doc(id).delete().catch(() => toast("Couldn’t sync that delete. Try again."));
     return Promise.resolve();
   }
@@ -923,6 +926,9 @@ function syncPanel(){
     ${(() => { const w = backupWarning(); return w ? `<div class="notice" style="color:var(--neg);margin:0 0 10px">⚠ ${esc(w)}</div>` : ""; })()}
     ${S.bcheck && !S.bcheck.busy ? `<div class="notice" style="margin:0 0 10px">${S.bcheck.ok ? "✅" : "⚠"} ${S.bcheck.msg}</div>` : ""}
     <div class="row">${driveOn() ? `<button class="btn sm" data-act="drive-now" ${driveBusy?"disabled":""}>${driveBusy ? '<span class="spinner"></span> Backing up' : "Back up to Drive now"}</button><button class="btn ghost sm" data-act="drive-check" ${S.bcheck && S.bcheck.busy ? "disabled" : ""}>${S.bcheck && S.bcheck.busy ? '<span class="spinner"></span> Checking' : "Check my backups"}</button><button class="btn ghost sm" data-act="drive-off">Turn off</button>` : `<button class="btn sm" data-act="drive-on">Turn on daily Drive backups</button>`}</div>
+    <h3 style="margin:18px 0 6px">LifeBud</h3>
+    <p class="muted" style="margin:0 0 10px">If you use LifeBud, it can show this paycheck, goals, Review count, upcoming subscriptions and your live account balances. Payday saves a small summary (numbers and account names only, no store names) in your Firebase, and LifeBud reads it. Tap the first button, then paste the code into LifeBud under Settings > Payday. Treat the code like a password: it lets LifeBud read your Payday data.</p>
+    <div class="row"><button class="btn ghost sm" data-act="lb-code">Copy LifeBud code</button><button class="btn ghost sm" data-act="lb-now">Update summary now</button></div>
     <h3 style="margin:18px 0 6px">Undo a mistake</h3>
     <p class="muted" style="margin:0 0 8px">A copy is also saved in your Firebase project once a day (last 30 days). Go back to one if something gets deleted by accident.</p>
     ${snaps}</div>`;
@@ -3209,6 +3215,7 @@ async function attachCloud(u){
     if (S.ready && snap.metadata.hasPendingWrites) return;
     const docs = {}; snap.docs.forEach(d => { docs[d.id] = d.data(); });
     writeLocal(docs); if (DEMO) return; applyDocs(docs); S.ready = true; setTimeout(processAutopull, 50);
+    if (typeof lbSchedule === "function") lbSchedule();
     if (isTyping() || $("#sheetRoot").innerHTML) S.deferRender = true; else render();
   }, err => toast("Sync paused (" + (err.code || "error") + "). Your changes are saved on this device."));
   ref.onSnapshot({includeMetadataChanges: true}, snap => { SYNC.pending = snap.docs.filter(d => d.metadata.hasPendingWrites).length; SYNC.fromCache = snap.metadata.fromCache; if (!SYNC.pending && !SYNC.fromCache) SYNC.at = Date.now(); paintSync(); }, () => {});
@@ -3634,6 +3641,14 @@ document.addEventListener("click", async e => {
     catch(_){ openSheet(`<h2>Link for your other device</h2><p class="muted">Copy this and open it on your other device.</p><textarea class="input" readonly>${esc(link)}</textarea><div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" data-act="close">Done</button></div>`); }
   }
   else if (a === "drive-now") driveBackup();
+  else if (a === "lb-now"){ await lbPublish(true); toast("LifeBud summary updated."); }
+  else if (a === "lb-code"){
+    const code = lbCode();
+    if (!code){ toast("Sign in with Google first."); }
+    else { await lbPublish(true);
+      try{ await navigator.clipboard.writeText(code); toast("Code copied. Paste it in LifeBud > Settings > Payday."); }
+      catch(_){ openSheet(`<h2>LifeBud code</h2><p class="muted">Copy this and paste it in LifeBud under Settings > Payday. Keep it private.</p><textarea class="input" readonly>${esc(code)}</textarea><div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" data-act="close">Done</button></div>`); } }
+  }
   else if (a === "drive-on"){ lsSet("payday-drive", "on"); render(); }
   else if (a === "drive-off"){ lsSet("payday-drive", "off"); render(); }
   else if (a === "snaps") loadCloudSnaps();

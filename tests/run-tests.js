@@ -3,7 +3,7 @@
 "use strict";
 const fs = require("fs"), path = require("path"), vm = require("vm");
 
-const code = ["app.js", "plan.js"].map(f => fs.readFileSync(path.join(__dirname, "..", f), "utf8")).join("\n;\n");
+const code = ["app.js", "lblink.js", "plan.js"].map(f => fs.readFileSync(path.join(__dirname, "..", f), "utf8")).join("\n;\n");
 
 // A do-nothing stand-in for the browser: every property and call just returns another stand-in.
 const dummy = () => new Proxy(function(){}, {
@@ -23,7 +23,7 @@ const ctx = {
 ctx.window = ctx; ctx.self = ctx; ctx.globalThis = ctx;
 vm.createContext(ctx);
 vm.runInContext(code + `
-;globalThis.__api = {S, calc, periodList, todayIso, addDays, r2, parseQuery, billDates, billPaid, safeInfo, debtSim, sinkShare, whatIf, noSpendInfo, biggestChange, netWorth, gasStats, icsText, plan, addMonthsIso, paychecksUntil, watchArrived, parseStub, cardCycle, dupGroups, unusualCharges, ruleReach, moneyInMatches, recapData, taxData, roundUps, norm, sureFund, checkinData, checkinDue, forecastInfo, upcomingPaychecks, parseBankText, debtBal, challengeInfo, suggestedLimits, tagSpent, weekSpent, monthlyNeed};`, ctx, { filename: "app.js+plan.js" });
+;globalThis.__api = {lbSummary, lbCode, lbAccounts, S, calc, periodList, todayIso, addDays, r2, parseQuery, billDates, billPaid, safeInfo, debtSim, sinkShare, whatIf, noSpendInfo, biggestChange, netWorth, gasStats, icsText, plan, addMonthsIso, paychecksUntil, watchArrived, parseStub, cardCycle, dupGroups, unusualCharges, ruleReach, moneyInMatches, recapData, taxData, roundUps, norm, sureFund, checkinData, checkinDue, forecastInfo, upcomingPaychecks, parseBankText, debtBal, challengeInfo, suggestedLimits, tagSpent, weekSpent, monthlyNeed};`, ctx, { filename: "app.js+plan.js" });
 const A = ctx.__api;
 
 let pass = 0, fail = 0;
@@ -240,5 +240,16 @@ eq("a slip breaks a day", A.challengeInfo().clean, 6);
 A.S.periods["2026-10-30"].txns.push(Object.assign(tx("2026-11-04", 55), { tags: ["vacation"] }), Object.assign(tx("2026-11-04", -5), { tags: ["vacation"] }));
 eq("tag spent (refunds count back)", A.tagSpent("vacation"), 50);
 
+// LifeBud link
+A.S.settings.goalMilestones = A.S.settings.goalMilestones || {};
+A.plan().balances = { a1: { name: "Checking", mask: "1234", inst: "Chase", type: "depository", subtype: "checking", cur: 2500.5, avail: 2400, limit: null, at: "2026-11-09" }, a2: { name: "Gold", mask: "0001", inst: "Amex", type: "credit", subtype: "credit card", cur: 400.25, avail: null, limit: 5000, at: "2026-11-09" }, a3: { name: "NoBal", type: "depository" } };
+A.plan().bills = [{ id: "b1", name: "Rent", amount: 1200, freq: "monthly", due: "2026-12-01" }];
+const LBS = A.lbSummary();
+eq("link: summary identifies itself", [LBS.v, LBS.app], [1, "payday"]);
+eq("link: live balances included, accounts without a number skipped", LBS.accounts.map(a => [a.inst, a.name, a.type, a.current]), [["Chase", "Checking", "depository", 2500.5], ["Amex", "Gold", "credit", 400.25]]);
+eq("link: paycheck numbers present", ["personal", "gas", "debt", "savings"].every(k => typeof LBS[k] === "object" && LBS[k]), true);
+eq("link: bills carry a next date", LBS.bills.map(b => [b.name, b.amount, b.next >= A.todayIso()]), [["Rent", 1200, true]]);
+eq("link: summary stays small and has no store names", JSON.stringify(LBS).length < 100000 && !/Pizza|VERIZON|Store/.test(JSON.stringify(LBS)), true);
+eq("link: no code when not signed in", A.lbCode(), "");
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -1426,7 +1426,7 @@ HELP.splice(8, 0,
 try{ const t = localStorage.getItem("payday-theme"); if (t && t !== "auto") document.documentElement.dataset.theme = t; }catch(_){}
 function applyZoom(){ const z = parseFloat(lsGet("payday-zoom") || "1") || 1; document.body.style.zoom = z === 1 ? "" : String(z); }
 applyZoom(); applyPrivacy(); if (pinCfg()) lockNow(); takePick();
-takeLinkFromUrl(); localBoot(); setupPWA(); initFirebase(); takeSharedFile(); takeShortcut();
+lbGoFromUrl(); takeLinkFromUrl(); localBoot(); setupPWA(); initFirebase(); takeSharedFile(); takeShortcut();
 // "What changed while you were away" counts from the last time this device was used.
 if (!lsGet("payday-lastseen")) lsSet("payday-lastseen", String(Date.now()));
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden" && !awaySummary()) lsSet("payday-lastseen", String(Date.now())); });

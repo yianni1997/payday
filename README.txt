@@ -88,3 +88,7 @@ IF SOMETHING GOES WRONG
   APIs & Services > OAuth consent screen. If it's in Testing, add your Gmail under Test users
   (or click Publish app).
 - Sign-in window doesn't appear: allow pop-ups for your Payday site in the browser.
+
+
+LIFEBUD LINK (version 46)
+Settings > Sync > LifeBud: Copy LifeBud code (paste it in LifeBud > Settings > Payday) and Update summary now. Payday saves a numbers-only summary, plus your live account balances, in your Firebase. LifeBud's Net worth card uses those balances. This update adds a new file, lblink.js, so use the same update steps as always (it is in the zip).
