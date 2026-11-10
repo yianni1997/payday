@@ -250,6 +250,6 @@ eq("link: live balances included, accounts without a number skipped", LBS.accoun
 eq("link: paycheck numbers present", ["personal", "gas", "debt", "savings"].every(k => typeof LBS[k] === "object" && LBS[k]), true);
 eq("link: bills carry a next date", LBS.bills.map(b => [b.name, b.amount, b.next >= A.todayIso()]), [["Rent", 1200, true]]);
 eq("link: summary stays small and has no store names", JSON.stringify(LBS).length < 100000 && !/Pizza|VERIZON|Store/.test(JSON.stringify(LBS)), true);
-eq("link: no code when not signed in", A.lbCode(), "");
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+(async () => { const r = await A.lbCode(); eq("link: no code when not signed in", r, { err: "Sign in with Google first." }); })();
+eq("link: code no longer contains a refresh token", /refreshToken/.test(fs.readFileSync(path.join(__dirname, "..", "lblink.js"), "utf8").replace(/\/\/.*$/gm, "")), false);
+setTimeout(() => { console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0); }, 50);

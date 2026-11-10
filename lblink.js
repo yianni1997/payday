@@ -1,6 +1,7 @@
 /* ---------- LifeBud link (v46) ----------
    A small numbers-only summary other apps can read: paycheck buckets, goals, Review count, subscriptions,
-   spending limits, bills and your live account balances (from Accounts). No store names. */
+   spending limits, bills and your live account balances (from Accounts). It does include names:
+   subscription, bill and category names, and bank names with the last digits of each account. */
 const LB = {timer: null, last: "", day: "", balAt: 0, diag: ""};
 function lbNextDue(last, freq){
   const t = todayIso(); let d = toD(last);
@@ -84,10 +85,15 @@ async function lbPublish(force){
   }catch(e){ LB.diag = "Couldn't save the summary (" + (e.code || "error") + ")."; }
 }
 function lbSchedule(){ if (!store.cloud) return; clearTimeout(LB.timer); LB.timer = setTimeout(() => lbPublish(false), 4000); }
-function lbCode(){
+// v49: the code holds a one-time key for a separate LifeBud sign-in that can ONLY read
+// users/<you>/summary/lifebud (see the Firestore rule in README.txt). It never holds your Google login.
+// The key works once, within an hour; after that LifeBud stays signed in as that read-only user.
+async function lbCode(){
   const cfg = fbConfig(), u = FB.auth && FB.auth.currentUser;
-  if (!cfg || !u || !u.refreshToken) return "";
-  return "LBPD1." + btoa(JSON.stringify({k: cfg.apiKey, p: cfg.projectId, u: u.uid, r: u.refreshToken}));
+  if (!cfg || !u) return {err: "Sign in with Google first."};
+  if (!plaidUrl()) return {err: "The LifeBud code comes from your Payday server. Add your server link on the Accounts tab first."};
+  try{ const j = await plaidCall("lifebud_key"); return {code: "LBPD2." + btoa(JSON.stringify({k: cfg.apiKey, p: cfg.projectId, u: u.uid, t: j.token}))}; }
+  catch(e){ return {err: /Unknown request/.test(e.message) ? "Your Payday server needs the v49 update to make LifeBud codes (SETUP-PLAID.txt, LifeBud section)." : /iam|signBlob|permission/i.test(e.message) ? "Your server isn’t allowed to make sign-in keys yet. Give it the “Service Account Token Creator” role (SETUP-PLAID.txt, LifeBud section)." : "Couldn’t get a LifeBud code: " + e.message}; }
 }
 function lbGoFromUrl(){
   const m = /^#go=(\w+)/.exec(location.hash); if (!m) return;

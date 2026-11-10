@@ -39,8 +39,9 @@ const SOURCES = {
 };
 /* ---------- version ---------- */
 // Bump APP_VERSION (and the cache name in sw.js to match) with every update, and add a line to CHANGES.
-const APP_VERSION = 48, APP_DATE = "2026-11-09";
+const APP_VERSION = 49, APP_DATE = "2026-11-10";
 const CHANGES = [
+  [49, "2026-11-10", "Safer LifeBud link: the LifeBud code no longer contains your Google login. It now holds a one-time key for a read-only LifeBud sign-in that can only read the summary. Needs the server update and one Firestore rule (SETUP-PLAID.txt, LifeBud section). Make a new code and paste it in LifeBud."],
   [48, "2026-11-09", "LifeBud summary check now tells an old Payday server (no balances sent) apart from a bank that has no balances yet."],
   [47, "2026-11-09", "Update summary now (Settings > Sync > LifeBud) tells you exactly what was sent, or why no account balances were included."],
   [46, "2026-11-09", "LifeBud link is back: Payday saves a numbers-only summary (paycheck buckets, goals, Review count, subscriptions, spending limits, bills) plus your live account balances, so LifeBud's Net worth uses your real accounts. Settings > Sync > LifeBud."],
@@ -929,7 +930,7 @@ function syncPanel(){
     ${S.bcheck && !S.bcheck.busy ? `<div class="notice" style="margin:0 0 10px">${S.bcheck.ok ? "✅" : "⚠"} ${S.bcheck.msg}</div>` : ""}
     <div class="row">${driveOn() ? `<button class="btn sm" data-act="drive-now" ${driveBusy?"disabled":""}>${driveBusy ? '<span class="spinner"></span> Backing up' : "Back up to Drive now"}</button><button class="btn ghost sm" data-act="drive-check" ${S.bcheck && S.bcheck.busy ? "disabled" : ""}>${S.bcheck && S.bcheck.busy ? '<span class="spinner"></span> Checking' : "Check my backups"}</button><button class="btn ghost sm" data-act="drive-off">Turn off</button>` : `<button class="btn sm" data-act="drive-on">Turn on daily Drive backups</button>`}</div>
     <h3 style="margin:18px 0 6px">LifeBud</h3>
-    <p class="muted" style="margin:0 0 10px">If you use LifeBud, it can show this paycheck, goals, Review count, upcoming subscriptions and your live account balances. Payday saves a small summary (numbers and account names only, no store names) in your Firebase, and LifeBud reads it. Tap the first button, then paste the code into LifeBud under Settings > Payday. Treat the code like a password: it lets LifeBud read your Payday data.</p>
+    <p class="muted" style="margin:0 0 10px">If you use LifeBud, it can show this paycheck, goals, Review count, upcoming subscriptions and your live account balances. Payday saves a small summary (numbers plus subscription, bill, category and bank account names) in your Firebase, and LifeBud reads it. Tap the first button, then paste the code into LifeBud under Settings > Payday. Treat the code like a password: it lets LifeBud read your Payday data.</p>
     <div class="row"><button class="btn ghost sm" data-act="lb-code">Copy LifeBud code</button><button class="btn ghost sm" data-act="lb-now">Update summary now</button></div>
     <h3 style="margin:18px 0 6px">Undo a mistake</h3>
     <p class="muted" style="margin:0 0 8px">A copy is also saved in your Firebase project once a day (last 30 days). Go back to one if something gets deleted by accident.</p>
@@ -3645,11 +3646,12 @@ document.addEventListener("click", async e => {
   else if (a === "drive-now") driveBackup();
   else if (a === "lb-now"){ await lbPublish(true); const m = LB.diag || "LifeBud summary updated."; if (m.length < 50) toast(m); else openSheet(`<h2>LifeBud summary</h2><p class="muted">${esc(m)}</p><div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" data-act="close">Done</button></div>`); }
   else if (a === "lb-code"){
-    const code = lbCode();
-    if (!code){ toast("Sign in with Google first."); }
+    toast("Getting a LifeBud code…");
+    const r = await lbCode(), code = r.code;
+    if (!code){ openSheet(`<h2>LifeBud code</h2><p class="muted">${esc(r.err)}</p><div class="row" style="justify-content:flex-end"><button class="btn" data-act="close">OK</button></div>`); }
     else { await lbPublish(true);
-      try{ await navigator.clipboard.writeText(code); toast("Code copied. Paste it in LifeBud > Settings > Payday."); }
-      catch(_){ openSheet(`<h2>LifeBud code</h2><p class="muted">Copy this and paste it in LifeBud under Settings > Payday. Keep it private.</p><textarea class="input" readonly>${esc(code)}</textarea><div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" data-act="close">Done</button></div>`); } }
+      try{ await navigator.clipboard.writeText(code); toast("Code copied. Paste it in LifeBud > Settings > Payday within the hour."); }
+      catch(_){ openSheet(`<h2>LifeBud code</h2><p class="muted">Paste this in LifeBud under Settings > Payday within the next hour. It only lets LifeBud read the summary, and works once.</p><textarea class="input" readonly>${esc(code)}</textarea><div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" data-act="close">Done</button></div>`); } }
   }
   else if (a === "drive-on"){ lsSet("payday-drive", "on"); render(); }
   else if (a === "drive-off"){ lsSet("payday-drive", "off"); render(); }

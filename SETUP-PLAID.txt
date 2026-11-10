@@ -80,3 +80,16 @@ GOOD TO KNOW
 - Your bank login goes to Plaid and the bank only. Plaid's access token is stored in a
   database collection the app itself cannot read (your Firestore rules only open users/<you>).
 - To disconnect a bank: Accounts tab > Remove.
+
+LIFEBUD LINK, SAFER VERSION (v49, about 5 minutes)
+The old LifeBud code contained your Google login. The new one only lets LifeBud read the summary.
+1. Update the server: replace index.js with the one in this zip's server folder. Redeploy.
+2. Let the server make sign-in keys: console.cloud.google.com > IAM & Admin > IAM. Find the service
+   account your function runs as (Cloud Run functions > payday-server > Details shows it; often
+   "...-compute@developer.gserviceaccount.com"). Edit it (pencil) > Add another role >
+   "Service Account Token Creator". Save. Wait a minute.
+3. Firestore rules: Firebase console > Firestore > Rules. Paste the rules from README.txt
+   (step 4, now with a LifeBud part) and Publish.
+4. In Payday: Settings > Sync > LifeBud > Copy LifeBud code. Paste it in LifeBud within the hour.
+5. Turn off the old code: Payday > Settings > Sync > sign out, then sign back in. That ends the
+   Google login the old code carried. (Also delete the old code anywhere you pasted it.)

@@ -46,6 +46,10 @@ service cloud.firestore {
     match /users/{uid}/{document=**} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
+    // LifeBud's read-only sign-in can read the summary and nothing else (version 49).
+    match /users/{uid}/summary/lifebud {
+      allow read: if request.auth != null && request.auth.token.lb == uid;
+    }
   }
 }
 

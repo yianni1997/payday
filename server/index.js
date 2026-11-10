@@ -162,6 +162,12 @@ functions.http('payday', async (req, res) => {
     if (limited('uid:' + uid, 40)){ warn('rate_limited_user', req); return res.status(429).json({ error: 'Too many requests. Wait a minute.' }); }
     const { action, ...p } = req.body || {};
 
+    // LifeBud (v49): a sign-in key for a separate user "lifebud-<you>". Firestore rules let that user
+    // read only users/<you>/summary/lifebud, nothing else. Needs the Service Account Token Creator role.
+    if (action === 'lifebud_key') {
+      const token = await admin.auth().createCustomToken('lifebud-' + uid, { lb: uid });
+      return res.json({ token });
+    }
     if (action === 'vapid') return res.json({ key: (await vapid()).publicKey });
     if (action === 'subscribe') {
       const sub = p.sub || {};
