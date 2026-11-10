@@ -39,8 +39,9 @@ const SOURCES = {
 };
 /* ---------- version ---------- */
 // Bump APP_VERSION (and the cache name in sw.js to match) with every update, and add a line to CHANGES.
-const APP_VERSION = 46, APP_DATE = "2026-11-09";
+const APP_VERSION = 47, APP_DATE = "2026-11-09";
 const CHANGES = [
+  [47, "2026-11-09", "Update summary now (Settings > Sync > LifeBud) tells you exactly what was sent, or why no account balances were included."],
   [46, "2026-11-09", "LifeBud link is back: Payday saves a numbers-only summary (paycheck buckets, goals, Review count, subscriptions, spending limits, bills) plus your live account balances, so LifeBud's Net worth uses your real accounts. Settings > Sync > LifeBud."],
   [45, "2026-11-09", "End-of-paycheck forecast, Upcoming paychecks, emergency fund months, Can I afford it? with a 48-hour wait list, suggested limits, bills found from repeating charges, undo for Plan deletes, copy a summary, recent searches, paste a bank text, debt balances that follow your payments, savings in net worth, trip and event budgets, no-spend challenge, tap a limit to see its charges, this-week total, Not worth it."],
   [44, "2026-11-09", "Sort a charge straight from the alert, auto-confirm your usual charges (Review → Confirmed for you), monthly check-in with one-tap fixes, and a tidier Plan page with folding sections and jump buttons."],
@@ -3641,7 +3642,7 @@ document.addEventListener("click", async e => {
     catch(_){ openSheet(`<h2>Link for your other device</h2><p class="muted">Copy this and open it on your other device.</p><textarea class="input" readonly>${esc(link)}</textarea><div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" data-act="close">Done</button></div>`); }
   }
   else if (a === "drive-now") driveBackup();
-  else if (a === "lb-now"){ await lbPublish(true); toast("LifeBud summary updated."); }
+  else if (a === "lb-now"){ await lbPublish(true); const m = LB.diag || "LifeBud summary updated."; if (m.length < 50) toast(m); else openSheet(`<h2>LifeBud summary</h2><p class="muted">${esc(m)}</p><div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" data-act="close">Done</button></div>`); }
   else if (a === "lb-code"){
     const code = lbCode();
     if (!code){ toast("Sign in with Google first."); }

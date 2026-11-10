@@ -92,3 +92,5 @@ IF SOMETHING GOES WRONG
 
 LIFEBUD LINK (version 46)
 Settings > Sync > LifeBud: Copy LifeBud code (paste it in LifeBud > Settings > Payday) and Update summary now. Payday saves a numbers-only summary, plus your live account balances, in your Firebase. LifeBud's Net worth card uses those balances. This update adds a new file, lblink.js, so use the same update steps as always (it is in the zip).
+
+Version 47: Update summary now (Settings > Sync > LifeBud) now shows what was sent, or why account balances were left out.

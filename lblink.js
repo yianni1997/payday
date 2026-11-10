@@ -1,7 +1,7 @@
 /* ---------- LifeBud link (v46) ----------
    A small numbers-only summary other apps can read: paycheck buckets, goals, Review count, subscriptions,
    spending limits, bills and your live account balances (from Accounts). No store names. */
-const LB = {timer: null, last: "", day: "", balAt: 0};
+const LB = {timer: null, last: "", day: "", balAt: 0, diag: ""};
 function lbNextDue(last, freq){
   const t = todayIso(); let d = toD(last);
   const step = () => {
@@ -55,19 +55,31 @@ function lbSummary(){
 }
 async function lbPublish(force){
   if (typeof DEMO !== "undefined" && DEMO) return;
-  if (!store.cloud || !FB.db || !S.ready) return;
-  if (plaidUrl() && FB.user && typeof plaidCall === "function" && (force || Date.now() - LB.balAt > 30 * 60 * 1000)){
+  if (!store.cloud || !FB.db || !S.ready){ LB.diag = "Not sent: sign in to sync first (Settings > Sync)."; return; }
+  let note = "";
+  if (!plaidUrl()) note = "No Payday server link is saved, so there are no live balances (Accounts tab > Your server link).";
+  else if (FB.user && typeof plaidCall === "function" && (force || Date.now() - LB.balAt > 30 * 60 * 1000)){
     LB.balAt = Date.now();
-    try{ const j = await plaidCall("items"); if (j && Array.isArray(j.items)){ PL.items = j.items; cacheBalances(); } }catch(e){ /* balances are optional */ }
+    try{
+      const j = await plaidCall("items");
+      if (j && Array.isArray(j.items)){
+        PL.items = j.items; cacheBalances();
+        const accts = j.items.flatMap(it => it.accounts || []), withBal = accts.filter(a => typeof a.current === "number").length, bad = j.items.find(it => it.error);
+        if (!j.items.length) note = "Your server reports no connected banks. Connect one on the Accounts tab.";
+        else if (!accts.length && bad) note = "Your bank connection has a problem: " + ((bad.error && bad.error.message) || "sign in to it again on the Accounts tab") + ".";
+        else if (accts.length && !withBal) note = "Your server returned " + accts.length + " accounts but no balances. If your Payday server is older than this zip's, redeploy it from the zip's server folder (older ones don't send balances).";
+      }
+    }catch(e){ note = "Couldn't reach your Payday server: " + (e.message || "error") + "."; }
   }
-  let s; try{ s = lbSummary(); }catch(e){ return; }
-  if (!s) return;
+  let s; try{ s = lbSummary(); }catch(e){ LB.diag = "Couldn't build the summary: " + e.message; return; }
+  if (!s){ LB.diag = "Not sent: no paycheck periods yet."; return; }
   const json = JSON.stringify(s), day = todayIso();
+  LB.diag = note || (s.accounts.length ? "Sent with " + s.accounts.length + " account balance" + (s.accounts.length === 1 ? "" : "s") + "." : "Sent, but no account balances yet. Open the Accounts tab, let your banks load, then try again.");
   if (!force && json === LB.last && LB.day === day) return;
   try{
     await FB.db.collection("users").doc(store.cloud.uid).collection("summary").doc("lifebud").set({json, at: Date.now(), v: 1});
     LB.last = json; LB.day = day;
-  }catch(e){ /* quiet: the summary is optional */ }
+  }catch(e){ LB.diag = "Couldn't save the summary (" + (e.code || "error") + ")."; }
 }
 function lbSchedule(){ if (!store.cloud) return; clearTimeout(LB.timer); LB.timer = setTimeout(() => lbPublish(false), 4000); }
 function lbCode(){
