@@ -39,8 +39,9 @@ const SOURCES = {
 };
 /* ---------- version ---------- */
 // Bump APP_VERSION (and the cache name in sw.js to match) with every update, and add a line to CHANGES.
-const APP_VERSION = 47, APP_DATE = "2026-11-09";
+const APP_VERSION = 48, APP_DATE = "2026-11-09";
 const CHANGES = [
+  [48, "2026-11-09", "LifeBud summary check now tells an old Payday server (no balances sent) apart from a bank that has no balances yet."],
   [47, "2026-11-09", "Update summary now (Settings > Sync > LifeBud) tells you exactly what was sent, or why no account balances were included."],
   [46, "2026-11-09", "LifeBud link is back: Payday saves a numbers-only summary (paycheck buckets, goals, Review count, subscriptions, spending limits, bills) plus your live account balances, so LifeBud's Net worth uses your real accounts. Settings > Sync > LifeBud."],
   [45, "2026-11-09", "End-of-paycheck forecast, Upcoming paychecks, emergency fund months, Can I afford it? with a 48-hour wait list, suggested limits, bills found from repeating charges, undo for Plan deletes, copy a summary, recent searches, paste a bank text, debt balances that follow your payments, savings in net worth, trip and event budgets, no-spend challenge, tap a limit to see its charges, this-week total, Not worth it."],

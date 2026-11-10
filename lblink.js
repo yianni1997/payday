@@ -67,7 +67,9 @@ async function lbPublish(force){
         const accts = j.items.flatMap(it => it.accounts || []), withBal = accts.filter(a => typeof a.current === "number").length, bad = j.items.find(it => it.error);
         if (!j.items.length) note = "Your server reports no connected banks. Connect one on the Accounts tab.";
         else if (!accts.length && bad) note = "Your bank connection has a problem: " + ((bad.error && bad.error.message) || "sign in to it again on the Accounts tab") + ".";
-        else if (accts.length && !withBal) note = "Your server returned " + accts.length + " accounts but no balances. If your Payday server is older than this zip's, redeploy it from the zip's server folder (older ones don't send balances).";
+        else if (accts.length && !withBal) note = accts.some(a => "current" in a)
+          ? "Your server is up to date, but Plaid returned no balances for your " + accts.length + " accounts. Plaid sometimes holds balances back until a bank refresh completes; try again in a few minutes. If it keeps happening, tell me which bank."
+          : "Your Payday server is an older version: it returned " + accts.length + " accounts but doesn't send balances. Redeploy it from the server folder of this zip (steps in SETUP-PLAID.txt), then try again.";
       }
     }catch(e){ note = "Couldn't reach your Payday server: " + (e.message || "error") + "."; }
   }
