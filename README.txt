@@ -2,6 +2,9 @@ PAYDAY - SETUP GUIDE
 ====================
 
 LIVE BANK PULLS: see SETUP-PLAID.txt (Accounts tab).
+v42/v43 NOTE: for bank balances, automatic pulls and phone alerts, update your server once (see "PART D" in SETUP-PLAID.txt).
+The tests folder is optional: on a computer with Node,
+run  node tests/run-tests.js  to check the money math.
 
 
 UPDATING YOUR SITE FROM INSIDE THE APP (after the one-time setup in Settings > Update the app)
@@ -42,6 +45,10 @@ service cloud.firestore {
   match /databases/{database}/documents {
     match /users/{uid}/{document=**} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+    // LifeBud's read-only sign-in can read the summary and nothing else (version 49).
+    match /users/{uid}/summary/lifebud {
+      allow read: if request.auth != null && request.auth.token.lb == uid;
     }
   }
 }
@@ -85,3 +92,9 @@ IF SOMETHING GOES WRONG
   APIs & Services > OAuth consent screen. If it's in Testing, add your Gmail under Test users
   (or click Publish app).
 - Sign-in window doesn't appear: allow pop-ups for your Payday site in the browser.
+
+
+LIFEBUD LINK (version 46)
+Settings > Sync > LifeBud: Copy LifeBud code (paste it in LifeBud > Settings > Payday) and Update summary now. Payday saves a numbers-only summary, plus your live account balances, in your Firebase. LifeBud's Net worth card uses those balances. This update adds a new file, lblink.js, so use the same update steps as always (it is in the zip).
+
+Version 47: Update summary now (Settings > Sync > LifeBud) now shows what was sent, or why account balances were left out.
