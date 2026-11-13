@@ -23,7 +23,7 @@ const ctx = {
 ctx.window = ctx; ctx.self = ctx; ctx.globalThis = ctx;
 vm.createContext(ctx);
 vm.runInContext(code + `
-;globalThis.__api = {applyDocs, lbSummary, lbSummary, lbCode, lbAccounts, S, calc, periodList, todayIso, addDays, r2, parseQuery, billDates, billPaid, safeInfo, debtSim, sinkShare, whatIf, noSpendInfo, biggestChange, netWorth, gasStats, icsText, plan, addMonthsIso, paychecksUntil, watchArrived, parseStub, cardCycle, dupGroups, unusualCharges, ruleReach, moneyInMatches, recapData, taxData, roundUps, norm, sureFund, checkinData, checkinDue, forecastInfo, upcomingPaychecks, parseBankText, debtBal, challengeInfo, suggestedLimits, tagSpent, weekSpent, monthlyNeed};`, ctx, { filename: "app.js+plan.js" });
+;globalThis.__api = {parseActivityText, guessPasteSrc, addImport, applyDocs, lbSummary, lbSummary, lbCode, lbAccounts, S, calc, periodList, todayIso, addDays, r2, parseQuery, billDates, billPaid, safeInfo, debtSim, sinkShare, whatIf, noSpendInfo, biggestChange, netWorth, gasStats, icsText, plan, addMonthsIso, paychecksUntil, watchArrived, parseStub, cardCycle, dupGroups, unusualCharges, ruleReach, moneyInMatches, recapData, taxData, roundUps, norm, sureFund, checkinData, checkinDue, forecastInfo, upcomingPaychecks, parseBankText, debtBal, challengeInfo, suggestedLimits, tagSpent, weekSpent, monthlyNeed};`, ctx, { filename: "app.js+plan.js" });
 const A = ctx.__api;
 
 let pass = 0, fail = 0;
@@ -277,6 +277,127 @@ eq("link: code no longer contains a refresh token", /refreshToken/.test(fs.readF
   eq("new bank charge counts, one Payday already has doesn't", s2.review.pending, 2);
   const s3 = buildSummary(pageCode, docs, { url: "http://x/", now: NOW, items: [{ itemId: "i", institution: "Chase", accounts: [{ id: "x", name: "Checking", mask: "1234", type: "depository", subtype: "checking", current: 812.5, available: 800, limit: null }], error: null }] });
   eq("fresh bank balance used", s3.accounts.map(a => a.current), [812.5]);
+}
+
+
+// ---------- pasted activity pages ----------
+{
+  reset("2026-11-13"); A.S.settings.selfName = "Yianni Pantaratos";
+  const P = (text, card) => A.parseActivityText(text, {card});
+  const flat = r => r.items.map(i => `${i.date} ${i.desc} ${i.flow}`);
+
+  // Layout A: grouped under date headings, name / type / amount
+  let r = P(`Activity
+All transactions
+Filter   Download
+Nov 12, 2026
+Temu
+Payment sent
+-$24.99
+Nov 10, 2026
+Dave Smith
+Payment received
++$40.00
+Nov 9, 2026
+Payment to Yianni Pantaratos
+Payment sent
+-$500.00 USD`, false);
+  eq("layout A: date headings, names, signs", flat(r), ["2026-11-12 Temu -24.99", "2026-11-10 Dave Smith 40", "2026-11-09 Payment to Yianni Pantaratos -500"]);
+
+  // Layout B: date inside the subtitle line
+  r = P(`Temu
+Nov 12, 2026 • Payment sent
+-$24.99 USD
+CityMD
+Nov 9 • Payment sent
+-$75.00 USD`, false);
+  eq("layout B: date in the subtitle", flat(r), ["2026-11-12 Temu -24.99", "2026-11-09 CityMD -75"]);
+
+  // Layout C: copied table, tab separated, Gross / Fee / Net columns
+  r = P("Date\tName\tType\tStatus\tGross\tFee\tNet\nNov 12, 2026\tTemu\tPayment\tCompleted\t-$24.99\t$0.00\t-$24.99\nNov 11, 2026\tNicokick\tPayment\tCompleted\t-$374.91\t$0.00\t-$374.91", false);
+  eq("layout C: table, fee and net columns not double counted", flat(r), ["2026-11-12 Temu -24.99", "2026-11-11 Nicokick -374.91"]);
+
+  // Layout D: a card's own page, charges shown as positive numbers, a payment shown negative, one pending
+  r = P(`PayPal Cashback Mastercard
+Available credit $2,340.00
+Recent activity
+Nov 12
+TEMU.COM
+$89.27
+Nov 11
+NICOKICK
+$374.91
+Nov 10
+Payment Thank You
+-$300.00
+Nov 13
+SHEETZ
+Pending
+$40.12`, true);
+  eq("layout D: positive charges flipped to money out", flat(r), ["2026-11-12 TEMU.COM -89.27", "2026-11-11 NICOKICK -374.91", "2026-11-10 Payment Thank You 300"]);
+  eq("layout D: pending row left out and counted", r.skip.pending, 1);
+  eq("layout D: header balance is not a charge", r.items.some(i => /available/i.test(i.desc)), false);
+
+  // No minus signs anywhere: guess direction from the words
+  r = P(`Nov 12, 2026
+Temu
+Payment sent
+$24.99
+Nov 11, 2026
+Amazon
+Refund
+$12.00`, false);
+  eq("no signs: words decide direction", flat(r), ["2026-11-12 Temu -24.99", "2026-11-11 Amazon 12"]);
+
+  // Funding rows, cancelled rows and other currencies are left out
+  r = P(`Nov 12, 2026
+Bank deposit
+Completed
+$50.00
+Nov 11, 2026
+Temu
+Canceled
+-$9.99
+Nov 10, 2026
+Shop UK
+-$12.00 GBP
+Nov 9, 2026
+CVS
+Completed
+-$8.00`, false);
+  eq("funding, canceled and foreign-currency rows dropped", flat(r), ["2026-11-09 CVS -8"]);
+
+  // Dates: no year (this year, or last year if that would be in the future), month/day/year, "Yesterday"
+  r = P(`Dec 28
+Old thing
+-$5.00
+11/05/2026
+Slash date
+-$6.00
+Yesterday
+Y-day
+-$7.00`, false);
+  eq("date forms", r.items.map(i => i.date), ["2025-12-28", "2026-11-05", "2026-11-12"]);
+
+  // Nothing readable: no items, but we still get a peek for diagnosing
+  r = P("Welcome back!\nYour summary\nNo transactions yet", false);
+  eq("nothing found gives no items and a peek", [r.items.length, r.peek.length > 0], [0, true]);
+
+  eq("source guess: card page", A.guessPasteSrc("PayPal Cashback Mastercard\nAvailable credit $5"), "paypal_mc");
+  eq("source guess: activity page mentioning the card stays PayPal activity", A.guessPasteSrc("Activity\nPayment to PayPal Cashback Mastercard\n-$100.00"), "paypal");
+
+  // Pasted rows go through the normal import: older dates are kept (own range), duplicates and card payments handled
+  reset("2026-11-13");
+  A.S.settings.selfName = "Yianni Pantaratos";
+  A.S.periods["2026-10-30"] = {kind: "period", date: "2026-10-30", amount: 1700, txns: []};
+  A.S.periods["2026-10-16"] = {kind: "period", date: "2026-10-16", amount: 1700, txns: [{id: "x1", date: "2026-10-20", desc: "Temu", fund: "personal", amount: 24.99, src: "chase_amazon"}]};
+  const rr = {id: "r1", src: "paypal_mc", flip: false, range: ["2026-10-18", "2026-11-12"], items: [
+    {date: "2026-10-20", desc: "TEMU.COM", flow: -24.99},
+    {date: "2026-10-22", desc: "NICOKICK", flow: -374.91},
+    {date: "2026-11-05", desc: "Payment Thank You", flow: 300}]};
+  A.addImport(rr);
+  const left = A.S.inbox.items.filter(i => i.status === "pending").map(i => i.desc);
+  eq("paste import: older charge kept, duplicate of a confirmed charge and the card payment not sent to Review", left, ["NICOKICK"]);
 }
 
 setTimeout(() => { console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0); }, 50);

@@ -98,3 +98,12 @@ LIFEBUD LINK (version 46)
 Settings > Sync > LifeBud: Copy LifeBud code (paste it in LifeBud > Settings > Payday) and Update summary now. Payday saves a numbers-only summary, plus your live account balances, in your Firebase. LifeBud's Net worth card uses those balances. This update adds a new file, lblink.js, so use the same update steps as always (it is in the zip).
 
 Version 47: Update summary now (Settings > Sync > LifeBud) now shows what was sent, or why account balances were left out.
+
+PASTE FROM PAYPAL (version 51)
+Import tab > "Paste text instead", or Match a statement > "Or paste the page text".
+Open a PayPal page (your Activity page, or your card's own activity or statement page), select everything
+(Ctrl+A, or long-press > Select all on a phone), copy, and paste. Payday finds the charges and sends them
+through the usual steps: duplicates caught, card payments and reloads left out, nothing counts until you confirm
+it in Review. Pending rows are skipped until they post. No server update is needed for this version.
+Note: PayPal's general Activity page only lists card purchases that went through PayPal. Purchases where you
+tapped or typed the card directly are on the card's own page or statement.

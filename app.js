@@ -39,8 +39,9 @@ const SOURCES = {
 };
 /* ---------- version ---------- */
 // Bump APP_VERSION (and the cache name in sw.js to match) with every update, and add a line to CHANGES.
-const APP_VERSION = 50, APP_DATE = "2026-11-10";
+const APP_VERSION = 51, APP_DATE = "2026-11-13";
 const CHANGES = [
+  [51, "2026-11-13", "Paste from PayPal: copy a PayPal activity page (or your card’s page or statement) and paste it on the Import tab or in Match a statement. The statement check also shows what it saw when it finds nothing."],
   [50, "2026-11-10", "LifeBud stays current even when Payday is closed: your Payday server rebuilds the summary on every scheduled run (every 3 hours), using Payday's own code, with fresh bank balances. Payday also sends the summary right away when you close or leave it. Needs the server update (SETUP-PLAID.txt, LifeBud auto-refresh)."],
   [49, "2026-11-10", "Safer LifeBud link: the LifeBud code no longer contains your Google login. It now holds a one-time key for a read-only LifeBud sign-in that can only read the summary. Needs the server update and one Firestore rule (SETUP-PLAID.txt, LifeBud section). Make a new code and paste it in LifeBud."],
   [48, "2026-11-09", "LifeBud summary check now tells an old Payday server (no balances sent) apart from a bank that has no balances yet."],
@@ -839,6 +840,7 @@ function viewImport(){
   <p class="muted" style="margin:0 0 10px">Pick where the statement came from, then add the file. Everything lands in Review first, so nothing counts until you confirm it.</p>
   <div class="seg">${srcBtns}</div>
   <label class="drop" id="drop"><input type="file" id="fileIn" multiple accept="${accept}"><b>Choose statement files</b><span class="muted">CSV works best. PDF statements are read too, but check those amounts in Review.</span></label>
+  <p style="margin:-4px 0 10px"><button class="btn ghost sm" data-act="paste-open">Paste text instead (PayPal activity page)</button></p>
   ${imps}
   ${(S.inbox.importLog || []).length ? `<p style="margin:14px 0 0"><button class="btn ghost sm" data-act="open-imports">Import history (${S.inbox.importLog.length})</button></p>` : ""}
   <div class="help">
@@ -1571,6 +1573,9 @@ function reconSheet(src, month){
     </div>
     <p class="small muted" style="margin:-6px 0 10px">Card statements usually don’t line up with the calendar month. Use the statement’s own dates if they’re different.</p>
     <label class="field"><span>Best: compare a statement file (CSV or PDF)</span><input type="file" id="rc-file" accept="*/*"><small>Payday reads it and checks every purchase against what you confirmed, so you can see exactly what’s missing.</small></label>
+    <details style="margin:0 0 12px"><summary class="small" style="cursor:pointer;font-weight:700">Or paste the page text (PayPal activity, your card’s page, or statement text)</summary>
+      <textarea class="input" id="rc-paste" placeholder="Open the page, select everything (Ctrl+A, or long-press and Select all), copy, and paste here" style="min-height:120px;margin-top:8px;font-family:var(--body);font-size:14px"></textarea>
+      <div class="row" style="margin-top:8px"><button class="btn sm" data-act="recon-paste">Check pasted text</button></div></details>
     <label class="field"><span>Or type the statement’s total purchases / charges</span><input class="input num" id="rc-stmt" inputmode="decimal" placeholder="$0.00" value="${prev ? prev.stmt : ""}"><small>Not payments to the card or transfers. Those are left out of Payday on purpose.</small></label>
     <div id="rc-out"></div><div id="rc-detail"></div>
     <div class="row" style="justify-content:flex-end;margin-top:6px"><button class="btn ghost" data-act="close">Close</button><button class="btn" data-act="recon-check">Compare</button></div>`);
@@ -1613,13 +1618,14 @@ function reconWhere(from, to, skip){
 }
 async function readStatementFile(file){
   if (/\.csv$/i.test(file.name) || file.type === "text/csv"){
-    const res = readTabular(parseCSV(await file.text()), "auto", file.name);
-    return {items: res.items, src: res.src};
+    const rows = parseCSV(await file.text()), peek = rows.slice(0, 4).map(r => r.join(" | ").slice(0, 140));
+    let res; try{ res = readTabular(rows, "auto", file.name); }catch(e){ e.peek = peek; throw e; }
+    return {items: res.items, src: res.src, peek};
   }
   if (/\.pdf$/i.test(file.name) || file.type === "application/pdf"){
     const lines = await pdfLines(file);
     if (!lines.join("").trim()) throw new Error("This PDF has no readable text (it may be a scan). Use the CSV download instead.");
-    let items = [];
+    let items = []; const peek = lines.slice(0, 8).map(l => l.slice(0, 140));
     if (sampleFn){
       const chunks = []; let cur = "";
       lines.forEach(l => { if (cur.length + l.length > 14000){ chunks.push(cur); cur = ""; } cur += l + "\n"; });
@@ -1628,16 +1634,32 @@ async function readStatementFile(file){
     } else items = regexFromLines(lines);
     const head = file.name + " " + lines.slice(0, 60).join(" ");
     const src = /paypal|synchrony/i.test(head) ? (/mastercard|synchrony|cashback/i.test(head) ? "paypal_mc" : "paypal") : /amazon/i.test(head) ? "chase_amazon" : "auto";
-    return {items, src};
+    return {items, src, peek};
   }
   throw new Error("Use a CSV or PDF file.");
 }
 async function reconFile(file){
   const box = $("#rc-detail"); box.innerHTML = `<div class="notice" style="margin-bottom:10px">Reading ${esc(file.name)}…</div>`;
+  try{ reconRun(await readStatementFile(file), file.name); }
+  catch(e){ reconFail(e); }
+}
+function reconFail(e){
+  const box = $("#rc-detail"); if (!box) return;
+  box.innerHTML = `<div class="notice" style="margin-bottom:10px;color:var(--neg)">${esc((e && e.message) || "Couldn’t read that.")}</div>` +
+    (e && e.peek && e.peek.length ? `<div class="panel" style="margin:0 0 12px"><div class="small muted">This is what Payday saw at the top. If it looks like a statement, send me a screenshot and I’ll teach it this layout.</div><pre style="white-space:pre-wrap;font-size:12px;margin:8px 0 0;overflow-x:auto">${esc(e.peek.join("\n"))}</pre></div>` : "");
+}
+function reconPaste(){
+  const text = ($("#rc-paste") || {}).value || "", src = $("#rc-src").value;
+  if (!text.trim()){ toast("Paste the page text first."); return; }
+  const res = parseActivityText(text, {card: CARD_SRC.includes(src)});
+  try{ reconRun({items: res.items, src: src === "all" ? "paypal" : src, peek: res.peek}, "pasted text"); }
+  catch(e){ reconFail(e); }
+}
+function reconRun(res, label){
+  const box = $("#rc-detail");
   try{
-    const res = await readStatementFile(file);
     const items = res.items.filter(i => i.date && i.flow && !isNaN(i.flow));
-    if (!items.length) throw new Error("No transactions were found in that file. If it’s a PDF, try the CSV download.");
+    if (!items.length){ const er = new Error("No transactions were found in that " + (label === "pasted text" ? "text" : "file") + ". If it’s a PDF, try the CSV download or paste the text."); er.peek = res.peek; throw er; }
     const sel = $("#rc-src"), src = RECON_SRCS.includes(res.src) ? res.src : sel.value;
     sel.value = src;
     const dates = items.map(i => i.date).sort(), from = dates[0], to = dates[dates.length - 1];
@@ -1665,8 +1687,8 @@ async function reconFile(file){
     const row = (d, a, note) => `<div class="tx" style="cursor:default"><span class="mid"><span class="d" style="display:block">${esc(d.desc)}</span><span class="c">${esc(short(d.date))}${note ? " • " + esc(note) : ""}</span></span><b class="num">${money(a)}</b></div>`;
     const sect = (title, list, extraHtml) => list.length ? `<div style="margin-top:12px"><b>${title} (${list.length})</b>${extraHtml || ""}<div class="list" style="margin-top:6px">${list.join("")}</div></div>` : "";
     const clean = !groups.none.length && !groups.review.length && !groups.dup.length && !groups.denied.length && !extra.length;
-    S.reconSend = groups.none.length ? {items: groups.none.map(x => ({date: x.date, desc: x.desc, flow: x.flow})), src: RECON_SRCS.includes(src) ? src : "other", range: [from, to], name: "Statement check: " + file.name} : null;
-    box.innerHTML = `<div class="panel" style="margin:0 0 12px"><b>Line by line: ${esc(file.name)}</b>
+    S.reconSend = groups.none.length ? {items: groups.none.map(x => ({date: x.date, desc: x.desc, flow: x.flow})), src: RECON_SRCS.includes(src) ? src : "other", range: [from, to], name: "Statement check: " + label} : null;
+    box.innerHTML = `<div class="panel" style="margin:0 0 12px"><b>Line by line: ${esc(label)}</b>
       <div class="small muted" style="margin-top:4px">${esc(SOURCES[src] || "Account")} • ${esc(short(from))} to ${esc(short(to))} • ${stm.length} purchase${stm.length === 1 ? "" : "s"} on the statement, ${matched} matched in Payday. Payments to cards and transfers are left out on both sides.${looseHit ? ` <b>${looseHit} of those matched charges have no account tag</b> (added by hand or from your old spreadsheet), so the total above doesn’t count them for this account.` : ""}</div>
       ${clean ? `<div style="margin-top:10px">✅ Every purchase on the statement is in Payday, and Payday has nothing extra.</div>` : ""}
       ${sect("On the statement, missing from Payday", groups.none.map(x => row(x, x.amt)), `<div class="row" style="margin:6px 0 0"><button class="btn sm" data-act="recon-send">Send these ${groups.none.length} to Review</button></div>`)}
@@ -1675,7 +1697,7 @@ async function reconFile(file){
       ${sect("On the statement, but you denied them", groups.denied.map(x => row(x, x.amt)))}
       ${sect("In Payday, not on the statement", extra.map(r => row(r, r.bankAmt, "filed in " + short(r.p) + " paycheck")), `<div class="small muted">Could be pending when the statement closed, filed under the wrong account, or counted twice.</div>`)}
     </div>`;
-  }catch(e){ box.innerHTML = `<div class="notice" style="margin-bottom:10px;color:var(--neg)">${esc(e.message || "Couldn’t read that file.")}</div>`; }
+  }catch(e){ reconFail(e); }
 }
 
 /* =====================================================================
@@ -2050,7 +2072,7 @@ const JUMPS = [
   ["Savings goals", "goal target", () => { go("home"); setTimeout(goalsSheet, 50); }], ["Moved money to savings", "i moved it savings", () => movedSheet()],
   ["Close out a paycheck", "checklist closeout", () => { const d = closeoutDue()[0] || periodList().slice(-1)[0]; if (d) closeoutSheet(d); }],
   ["Paycheck report (PDF)", "print pdf report", () => printReport(periodList()[S.pIdx === null || S.pIdx >= periodList().length ? periodList().length - 1 : S.pIdx])],
-  ["Export like my spreadsheet", "xlsx excel export", () => xlsxSheet()], ["Download receipts", "receipt photos zip", () => receiptsSheet()], ["Spending calendar", "calendar heatmap days", () => { S.month = null; go("month"); }], ["Back up now", "backup save file", () => backupData()], ["What’s new", "version changes", () => whatsNewSheet()], ["Help", "how does guide explain", () => go("help")], ["More charts", "paycheck history income sources savings over time weekday weekend new places biggest account charge size", () => go("charts")], ["Restore one paycheck", "restore backup single", () => rpSheet()]
+  ["Export like my spreadsheet", "xlsx excel export", () => xlsxSheet()], ["Download receipts", "receipt photos zip", () => receiptsSheet()], ["Spending calendar", "calendar heatmap days", () => { S.month = null; go("month"); }], ["Back up now", "backup save file", () => backupData()], ["What’s new", "version changes", () => whatsNewSheet()], ["Paste from PayPal", "paste copy activity page text paypal card", () => { go("import"); setTimeout(pasteSheet, 60); }], ["Help", "how does guide explain", () => go("help")], ["More charts", "paycheck history income sources savings over time weekday weekend new places biggest account charge size", () => go("charts")], ["Restore one paycheck", "restore backup single", () => rpSheet()]
 ];
 function jumpSheet(){
   S.jsel = 0;
@@ -2442,6 +2464,7 @@ const HELP = [
   ["Keyboard shortcuts (PC)", "In Review: arrow keys move, C confirm, D deny, E edit, U undo, P/G/B/S/I/F/Y/X pick a fund, Space selects. Anywhere: Ctrl+K opens Jump anywhere."],
   ["Undo and Change history", "After confirming or denying, tap Undo in the message. For anything older, Settings → Tools → Change history lists the last 60 days with an Undo for each."],
   ["Bank pulls (Accounts)", "Pull new charges from Chase and PayPal with one tap on the Paycheck screen, or pick any paycheck on the Accounts tab. “What the pull found” lists every charge and what happened to it."],
+  ["Paste from PayPal", "Import tab → Paste text instead, or Match a statement → paste. Copy a PayPal page (Ctrl+A, Ctrl+C, or Select all on a phone) and paste it. Charges go through the usual duplicate checks and land in Review. Pending rows are skipped until they post."],
   ["Importing statements", "Import tab: drop in a CSV or PDF from Chase, PayPal or the PayPal Mastercard. Import history lets you undo an import."],
   ["Duplicates", "A charge on two accounts (like PayPal and Chase) only counts once. Check merges shows every pair Payday hid."],
   ["Card payments and reloads", "Paying a card bill or reloading PayPal isn’t spending, so it’s left out. The individual charges already count."],
@@ -2481,6 +2504,123 @@ function takeShortcut(){
     else if (m[1] === "add"){ go("home"); setTimeout(() => txSheet(null), 100); }
     else if (m[1] === "pull"){ go("home"); setTimeout(() => { const b = document.querySelector("[data-act=home-pull]"); if (b) b.click(); else toast("Bank pulls aren’t set up on this device yet."); }, 600); } };
   go2();
+}
+
+
+/* ---------- paste an activity page (PayPal, a card's page, or statement text) ---------- */
+const MON_RE = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
+const MON_NUM = {jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12};
+const ACT_NOISE = /^(completed|pending|canceled|cancelled|denied|declined|failed|expired|voided|refunded|partially refunded|refund|reversal|transfer|credit|debit|cash ?back|rewards?|on hold|held|in progress|unclaimed|payment|payments|payment sent|payment received|money sent|money received|sent|received|purchase|card purchase|transaction|transactions|usd|details|show details|view details|hide details|fee|fees|gross|net|status|date|description|amount|type|name|activity|all|all transactions|filter|filters|search|download|print|more|show more|load more|next|previous|prev|today|yesterday|this month|last month|year|balance|total|sort|report|reports|statement|statements|summary|wallet|shop|help|log out|settings|view receipt|get help|dispute|report a problem|resolve|recent activity|transaction history|posted|authorized)$/i;
+const ACT_DETAIL = /^(order|invoice|transaction|id|ref|reference|note|memo|receipt|item|quantity|qty|ship|tracking)\b/i;
+const ACT_BAL = /\b(balance|available credit|credit limit|minimum payment|payment due|due date|statement closing|total|apr|interest rate|rewards?)\b/i;
+const ACT_FUNDING = /(general )?(card|bank) deposit|authorization|\bhold\b|currency conversion|\bvoid\b|withdrawal|transfer to (your )?bank/i;
+const ACT_IN = /\b(received|refund(ed)?|credit|cash ?back|reward|reversal|deposit|payment from|transfer from|thank you|returned)\b/i;
+function actClean(t){ return String(t || "").replace(/[\u00a0\u200b]/g, " ").replace(/\s+/g, " ").replace(/^[\s•·|,:\-–—]+|[\s•·|,:\-–—]+$/g, ""); }
+function activityDate(line){
+  const t = todayIso(), y0 = +t.slice(0, 4);
+  const mk = (y, m, d) => { if (m < 1 || m > 12 || d < 1 || d > 31) return null; if (!y){ y = y0; if (`${y}-${pad(m)}-${pad(d)}` > addDays(t, 2)) y--; } else if (y < 100) y += 2000; return `${y}-${pad(m)}-${pad(d)}`; };
+  const out = (m, iso) => iso ? {iso, rest: actClean(line.replace(m[0], " "))} : null;
+  let m, r;
+  if ((m = line.match(new RegExp("\\b" + MON_RE + "\\.?\\s+(\\d{1,2})(?!\\d)(?:st|nd|rd|th)?(?:,?\\s+(\\d{4}))?", "i"))) && (m.index === 0 || line.length <= 48) && (r = out(m, mk(m[3] ? +m[3] : 0, MON_NUM[m[1].slice(0, 3).toLowerCase()], +m[2])))) return r;
+  if ((m = line.match(new RegExp("\\b(\\d{1,2})(?!\\d)(?:st|nd|rd|th)?\\s+" + MON_RE + "\\.?(?:,?\\s+(\\d{4}))?\\b", "i"))) && (r = out(m, mk(m[3] ? +m[3] : 0, MON_NUM[m[2].slice(0, 3).toLowerCase()], +m[1])))) return r;
+  if ((m = line.match(/\b(\d{4})-(\d{2})-(\d{2})\b/)) && (r = out(m, mk(+m[1], +m[2], +m[3])))) return r;
+  if ((m = line.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/)) && (r = out(m, mk(+m[3], +m[1], +m[2])))) return r;
+  if ((m = line.match(/\b(\d{1,2})\/(\d{1,2})\b(?!\/)/)) && (m.index === 0 || line.length <= 24) && (r = out(m, mk(0, +m[1], +m[2])))) return r;
+  if ((m = line.match(/\b(today|yesterday)\b/i)) && line.length <= 24) return {iso: m[1].toLowerCase() === "today" ? t : addDays(t, -1), rest: actClean(line.replace(m[0], " "))};
+  return null;
+}
+function activityAmount(line){
+  const cur = (line.match(/\b(USD|CAD|EUR|GBP|AUD|MXN|JPY)\s*$/i) || [])[1];
+  const body = line.replace(/\s*\b(USD|CAD|EUR|GBP|AUD|MXN|JPY)\s*$/i, "");
+  let m = body.match(/([+\-−]?)\s*(\(?)\s*\$\s*([+\-−]?)\s*(\d{1,3}(?:,\d{3})+|\d+)(\.\d{1,2})?\s*(\)?)\s*$/), signs, num, dec, paren, start;
+  if (m){ signs = m[1] + m[3]; paren = !!m[2]; num = m[4]; dec = m[5] || ""; start = m.index; }
+  else {
+    m = body.match(/^([+\-−]?)\s*(\(?)\s*(\d{1,3}(?:,\d{3})+|\d+)(\.\d{2})\s*(\)?)$/);
+    if (!m) return null;
+    signs = m[1]; paren = !!m[2]; num = m[3]; dec = m[4]; start = 0;
+  }
+  const amt = parseFloat(num.replace(/,/g, "") + dec);
+  if (!(amt > 0)) return null;
+  return {amt: r2(amt), neg: /[-−]/.test(signs) || paren, cur: (cur || "USD").toUpperCase(), rest: actClean(body.slice(0, start))};
+}
+function actCleanName(n){
+  const me = String(S.settings.selfName || "").trim().split(/\s+/).slice(-1)[0].toLowerCase();
+  if (me && n.toLowerCase().includes(me)) return n;
+  return n.replace(/^(payment|money|purchase|card purchase)( sent| received)?\s+(to|from|at)\s+/i, "").trim() || n;
+}
+function parseActivityText(text, opts){
+  opts = opts || {};
+  const lines = String(text || "").replace(/\r/g, "").split(/\n|\t/).map(actClean).filter(Boolean);
+  const peek = lines.slice(0, 10).map(l => l.slice(0, 140));
+  let curDate = null, buf = [], hints = [];
+  const rows = [], skip = {pending: 0, other: 0, currency: 0};
+  const meaningful = l => /[a-z]{2}/i.test(l) && !ACT_NOISE.test(l) && l.length <= 90;
+  const addParts = rest => { rest.split(/\s*[•·|]\s*/).map(actClean).filter(Boolean).forEach(p => { if (ACT_NOISE.test(p)) hints.push(p); else if (meaningful(p)) buf.push(p); else if (p.length > 1) hints.push(p); }); };
+  for (let line of lines){
+    const d = activityDate(line); if (d){ curDate = d.iso; line = d.rest; if (!line) continue; }
+    const a = activityAmount(line);
+    if (a){
+      let cand = a.rest && a.rest.split(/\s*[•·|]\s*/).map(actClean).filter(meaningful)[0];
+      if (!cand){ const pool = buf.filter(l => !ACT_DETAIL.test(l)); cand = pool[pool.length - 1] || buf[buf.length - 1]; }
+      if (cand && curDate){
+        const hint = hints.join(" ") + " " + (a.rest || "") + " " + cand;
+        if (a.cur !== "USD") skip.currency++;
+        else if (/\bpending\b/i.test(hint)) skip.pending++;
+        else if (/\b(cancel+ed|denied|declined|failed|expired|voided)\b/i.test(hint) || ACT_FUNDING.test(hint) || ACT_BAL.test(cand)) skip.other++;
+        else rows.push({date: curDate, desc: actCleanName(cand), amt: a.amt, neg: a.neg, hint});
+        buf = []; hints = [];
+      }
+      continue;
+    }
+    addParts(line);
+    if (buf.length > 3) buf = buf.slice(-3);
+    if (hints.length > 6) hints = hints.slice(-6);
+  }
+  // Signs: if the page shows minus signs, read them literally. If it shows none, guess from words like "received" or "refund".
+  const anyMinus = rows.some(r => r.neg);
+  let items = rows.map(r => ({date: r.date, desc: r.desc, flow: anyMinus ? (r.neg ? -r.amt : r.amt) : (ACT_IN.test(r.hint) ? r.amt : -r.amt)}));
+  let how = `Read ${items.length} row${items.length === 1 ? "" : "s"} from the pasted text.`;
+  if (opts.card && items.length && items.filter(i => i.flow > 0).length / items.length > 0.6){ items = items.map(i => ({...i, flow: -i.flow})); how += " Charges were shown as positive numbers, so signs were flipped."; }
+  if (skip.pending) how += ` ${skip.pending} pending row${skip.pending === 1 ? "" : "s"} left out until ${skip.pending === 1 ? "it posts" : "they post"}.`;
+  if (skip.currency) how += ` ${skip.currency} row${skip.currency === 1 ? "" : "s"} in another currency left out.`;
+  if (skip.other) how += ` ${skip.other} canceled, balance or funding row${skip.other === 1 ? "" : "s"} left out.`;
+  return {items, how, peek, skip};
+}
+function guessPasteSrc(text){
+  const t = String(text || "").slice(0, 8000).toLowerCase();
+  if (/available credit|credit limit|statement balance|minimum payment due|synchrony/.test(t)) return "paypal_mc";
+  if (/paypal/.test(t)) return "paypal";
+  if (/chase/.test(t)) return /credit card|sapphire|freedom|amazon|credit limit/.test(t) ? "chase_amazon" : "chase_bank";
+  return "paypal";
+}
+function pasteSheet(){
+  const opts = [["auto", "Detect automatically"], ["paypal_mc", "PayPal Mastercard"], ["paypal", "PayPal activity"], ["chase_bank", "Chase checking"], ["chase_amazon", "Chase Amazon card"], ["other", "Other"]];
+  openSheet(`<h2>Paste from PayPal</h2>
+    <ol class="small muted" style="margin:0 0 12px;padding-left:18px;line-height:1.6">
+      <li>Open the page in PayPal: your <b>Activity</b> page, or your <b>card’s own</b> activity or statement page.</li>
+      <li>Select everything (<b>Ctrl+A</b>, or on a phone long-press any text and tap <b>Select all</b>) and copy it.</li>
+      <li>Paste it below. Payday finds the charges and sends them through the usual steps: duplicates are caught, card payments and reloads are left out, and nothing counts until you confirm it in Review.</li>
+    </ol>
+    <p class="small muted" style="margin:0 0 10px">Heads up: PayPal’s general Activity page only lists card purchases that went <i>through PayPal</i>. Purchases where you tapped or typed the card directly are on the card’s own page or statement.</p>
+    <label class="field"><span>Which account is this?</span><select class="input" id="pasteSrc">${opts.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select></label>
+    <textarea class="input" id="pasteText" placeholder="Paste the page text here" style="min-height:170px;font-family:var(--body);font-size:14px"></textarea>
+    <div id="paste-out"></div>
+    <div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn ghost" data-act="close">Cancel</button><button class="btn" data-act="paste-read">Read it</button></div>`);
+}
+function pasteRead(){
+  const text = $("#pasteText").value, pick = $("#pasteSrc").value;
+  if (!text.trim()){ toast("Paste the page text first."); return; }
+  const src = pick === "auto" ? guessPasteSrc(text) : pick;
+  const res = parseActivityText(text, {card: CARD_SRC.includes(src)});
+  if (!res.items.length){
+    $("#paste-out").innerHTML = `<div class="notice" style="margin-top:10px;color:var(--neg)">I couldn’t find any charges in that text.</div>` +
+      `<div class="panel" style="margin:8px 0 0"><div class="small muted">This is what Payday saw at the top. If it looks like the right page, send me a screenshot and I’ll teach it this layout.</div><pre style="white-space:pre-wrap;font-size:12px;margin:8px 0 0;overflow-x:auto">${esc(res.peek.join("\n"))}</pre></div>`;
+    return;
+  }
+  const dates = res.items.map(i => i.date).sort();
+  const r = {id: uid(), name: "Pasted text", state: "ready", flip: false, items: res.items, src, how: res.how + ` Account guessed as ${SOURCES[src]}. Change it below if that’s wrong.`, range: [dates[0], dates[dates.length - 1]]};
+  S.imports.unshift(r); closeSheet(); S.view = "import"; render(); window.scrollTo(0, 0);
+  toast(`Read ${res.items.length} charge${res.items.length === 1 ? "" : "s"}. Check them, then tap Send to Review.`);
 }
 
 /* ---------- savings goals ---------- */
@@ -3462,6 +3602,9 @@ document.addEventListener("click", async e => {
   else if (a === "range"){ S.range = el.dataset.r; render(); }
   else if (a === "save-moved") movedSheet();
   else if (a === "goals-edit") goalsSheet();
+  else if (a === "paste-open") pasteSheet();
+  else if (a === "paste-read") pasteRead();
+  else if (a === "recon-paste") reconPaste();
   else if (a === "open-help") go("help");
   else if (a === "hmove"){ const o = homeOrder(), i = o.indexOf(el.dataset.k), j = i + +el.dataset.d; if (j >= 0 && j < o.length){ [o[i], o[j]] = [o[j], o[i]]; S.settings.homeOrder = o; store.save("settings", S.settings); render(); } }
   else if (a === "sx-csv") exportSearch("csv");
